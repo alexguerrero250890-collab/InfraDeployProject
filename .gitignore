@@ -1,0 +1,13 @@
+cat <<EOL > .gitignore
+# Terraform state
+*.tfstate
+*.tfstate.backup
+.terraform/
+
+# Ansible logs y caches
+*.retry
+
+# Archivos locales
+*.log
+EOL
+
