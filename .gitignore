@@ -1,13 +1,17 @@
-cat <<EOL > .gitignore
-# Terraform state
+# Terraform state files
 *.tfstate
 *.tfstate.backup
 .terraform/
 
-# Ansible logs y caches
-*.retry
+# Crash logs
+crash.log
 
-# Archivos locales
-*.log
-EOL
+# Sensitive files
+*.pem
+*.key
+*.env
+
+# Editor folders (opcional)
+.vscode/
+.idea/
 
