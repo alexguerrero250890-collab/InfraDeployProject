@@ -1,9 +1,21 @@
-# Security Group para EC2
+# Security Group para EC2 en el ASG
 resource "aws_security_group" "this" {
   name        = "${var.project_name}-ec2-sg"
-  description = "Security Group for EC2 instance"
+  description = "Security Group for EC2 instances in ASG"
   vpc_id      = var.vpc_id
 
+  # Permitir tráfico HTTP desde el ALB si se pasa el SG
+  dynamic "ingress" {
+    for_each = var.alb_sg_id != null ? [var.alb_sg_id] : []
+    content {
+      from_port       = 80
+      to_port         = 80
+      protocol        = "tcp"
+      security_groups = [ingress.value]
+    }
+  }
+
+  # Permitir acceso SSH desde cualquier IP
   ingress {
     from_port   = 22
     to_port     = 22
@@ -22,28 +34,4 @@ resource "aws_security_group" "this" {
     Name = "${var.project_name}-ec2-sg"
   }
 }
-
-# EC2 Instance
-resource "aws_instance" "this" {
-  ami                    = var.ami_id
-  instance_type          = var.instance_type
-  subnet_id              = var.subnet_id
-  vpc_security_group_ids = [aws_security_group.this.id]
-  key_name               = var.key_name
-
-  tags = {
-    Name = "${var.project_name}-ec2"
-  }
-}
-
-# Elastic IP
-resource "aws_eip" "this" {
-  instance = aws_instance.this.id
-  domain   = "vpc"
-
-  tags = {
-    Name = "${var.project_name}-eip"
-  }
-}
-
 

@@ -6,23 +6,37 @@ resource "aws_vpc" "this" {
   }
 }
 
+# ===============================
+# Public Subnets (MULTI)
+# ===============================
 resource "aws_subnet" "public" {
+  for_each = {
+    for idx, cidr in var.public_subnet_cidrs :
+    idx => cidr
+  }
+
   vpc_id                  = aws_vpc.this.id
-  cidr_block              = var.public_subnet_cidr
-  availability_zone       = var.availability_zones[0]
+  cidr_block              = each.value
+  availability_zone       = var.availability_zones[each.key]
   map_public_ip_on_launch = true
 
   tags = {
-    Name = "${var.project_name}-public-subnet"
+    Name = "${var.project_name}-public-subnet-${each.key + 1}"
   }
 }
 
+# ===============================
+# Private Subnets
+# ===============================
 resource "aws_subnet" "private" {
-  for_each = { for idx, az in var.availability_zones : idx => az }
+  for_each = {
+    for idx, cidr in var.private_subnet_cidrs :
+    idx => cidr
+  }
 
   vpc_id            = aws_vpc.this.id
-  cidr_block        = var.private_subnet_cidrs[each.key]
-  availability_zone = each.value
+  cidr_block        = each.value
+  availability_zone = var.availability_zones[each.key]
 
   tags = {
     Name = "${var.project_name}-private-subnet-${each.key + 1}"
@@ -51,7 +65,9 @@ resource "aws_route_table" "public" {
 }
 
 resource "aws_route_table_association" "public" {
-  subnet_id      = aws_subnet.public.id
+  for_each = aws_subnet.public
+
+  subnet_id      = each.value.id
   route_table_id = aws_route_table.public.id
 }
 

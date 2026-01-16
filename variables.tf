@@ -19,10 +19,10 @@ variable "instance_type" {
 variable "ami_id" {
   description = "AMI ID for EC2 in eu-north-1"
   type        = string
-  default     = "ami-0b46816ffa1234887"  
+  default     = "ami-0b46816ffa1234887"
 }
 
-#posgresql de aqui en adelante
+# PostgreSQL variables
 variable "db_name" {
   type        = string
   description = "Nombre DB"
@@ -48,3 +48,4 @@ variable "db_allocated_storage" {
   type        = number
   default     = 20
 }
+
