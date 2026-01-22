@@ -36,39 +36,7 @@ module "vpc" {
 }
 
 # ===============================
-# ROUTE53 (usamos zona existente)
-# ===============================
-module "route53" {
-  source       = "./terraform/modules/route53"
-  project_name = var.project_name
-  environment  = "dev"
-  domain_name  = "infraproj.com"
-}
-
-# ===============================
-# ACM (certificado HTTPS)
-# ===============================
-module "acm" {
-  source         = "./terraform/modules/acm"
-  project_name   = var.project_name
-  environment    = "dev"
-  domain_name    = "dev.infraproj.com"
-  hosted_zone_id = module.route53.zone_id
-}
-
-# ===============================
-# ALB (HTTP → HTTPS, HTTPS con ACM)
-# ===============================
-module "alb" {
-  source               = "./terraform/modules/alb"
-  project_name         = var.project_name
-  subnet_ids           = module.vpc.public_subnet_ids
-  vpc_id               = module.vpc.vpc_id
-  acm_certificate_arn  = module.acm.certificate_arn
-}
-
-# ===============================
-# EC2 SG (para ASG)
+# EC2 Security Group (solo SG)
 # ===============================
 module "ec2" {
   source       = "./terraform/modules/ec2"
@@ -100,7 +68,17 @@ module "rds" {
 }
 
 # ===============================
-# ASG
+# ALB
+# ===============================
+module "alb" {
+  source       = "./terraform/modules/alb"
+  project_name = var.project_name
+  subnet_ids   = module.vpc.public_subnet_ids
+  vpc_id       = module.vpc.vpc_id
+}
+
+# ===============================
+# Auto Scaling Group
 # ===============================
 module "autoscaling" {
   source               = "./terraform/modules/ec2-asg"
@@ -116,17 +94,23 @@ module "autoscaling" {
 }
 
 # ===============================
-# Route53 record para ALB
+# Route53 (Hosted Zone existente)
 # ===============================
-resource "aws_route53_record" "alb_dev" {
-  zone_id = module.route53.zone_id
-  name    = "dev"
-  type    = "A"
+module "route53" {
+  source = "./terraform/modules/route53"
 
-  alias {
-    name                   = module.alb.dns_name
-    zone_id                = module.alb.zone_id
-    evaluate_target_health = true
-  }
+  domain_name = "infraproj.com"
+}
+
+# ===============================
+# ACM (certificado HTTPS)
+# ===============================
+module "acm" {
+  source = "./terraform/modules/acm"
+
+  project_name   = var.project_name
+  environment    = "dev"
+  domain_name    = "dev.infraproj.com"
+  hosted_zone_id = module.route53.hosted_zone_id
 }
 

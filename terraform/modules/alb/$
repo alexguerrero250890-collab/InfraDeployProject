@@ -13,6 +13,7 @@ variable "subnet_ids" {
   type        = list(string)
 }
 
+# Nuevo: ARN del certificado ACM
 variable "acm_certificate_arn" {
   description = "ARN del certificado ACM para HTTPS"
   type        = string

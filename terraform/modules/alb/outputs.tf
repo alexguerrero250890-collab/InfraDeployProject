@@ -13,3 +13,8 @@ output "alb_sg_id" {
   value       = aws_security_group.alb.id
 }
 
+output "zone_id" {
+  description = "Zone ID del ALB"
+  value       = aws_lb.this.zone_id
+}
+
