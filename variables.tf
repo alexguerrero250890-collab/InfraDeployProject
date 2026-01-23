@@ -40,12 +40,12 @@ variable "db_password" {
 }
 
 variable "db_instance_class" {
-  type        = string
-  default     = "db.t3.micro"
+  type    = string
+  default = "db.t3.micro"
 }
 
 variable "db_allocated_storage" {
-  type        = number
-  default     = 20
+  type    = number
+  default = 20
 }
 

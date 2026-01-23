@@ -30,3 +30,13 @@ variable "alb_sg_id" {
   type = string
 }
 
+variable "min_size" {
+  description = "Minimum number of instances in the ASG"
+  type        = number
+}
+
+variable "desired_capacity" {
+  description = "Desired number of instances in the ASG"
+  type        = number
+}
+

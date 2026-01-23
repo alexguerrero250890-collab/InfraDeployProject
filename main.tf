@@ -60,11 +60,11 @@ module "acm" {
 # ALB (HTTP → HTTPS, HTTPS con ACM)
 # ===============================
 module "alb" {
-  source               = "./terraform/modules/alb"
-  project_name         = var.project_name
-  subnet_ids           = module.vpc.public_subnet_ids
-  vpc_id               = module.vpc.vpc_id
-  acm_certificate_arn  = module.acm.certificate_arn
+  source              = "./terraform/modules/alb"
+  project_name        = var.project_name
+  subnet_ids          = module.vpc.public_subnet_ids
+  vpc_id              = module.vpc.vpc_id
+  acm_certificate_arn = module.acm.certificate_arn
 }
 
 # ===============================
@@ -103,16 +103,19 @@ module "rds" {
 # ASG
 # ===============================
 module "autoscaling" {
-  source               = "./terraform/modules/ec2-asg"
-  project_name         = var.project_name
-  ami_id               = var.ami_id
-  instance_type        = var.instance_type
-  key_name             = "KP"
-  subnet_ids           = module.vpc.public_subnet_ids
-  vpc_id               = module.vpc.vpc_id
+  source        = "./terraform/modules/ec2-asg"
+  project_name  = var.project_name
+  ami_id        = var.ami_id
+  instance_type = var.instance_type
+  key_name      = "KP"
+  subnet_ids    = module.vpc.public_subnet_ids
+  vpc_id        = module.vpc.vpc_id
 
   alb_target_group_arn = module.alb.target_group_arn
   alb_sg_id            = module.alb.alb_sg_id
+
+  min_size         = 0
+  desired_capacity = 0
 }
 
 # ===============================

@@ -57,9 +57,9 @@ EOF
 # =========================
 resource "aws_autoscaling_group" "this" {
   name                = "${var.project_name}-asg"
-  desired_capacity    = 1
-  min_size            = 1
-  max_size            = 2
+  desired_capacity    = var.desired_capacity
+  min_size            = var.min_size
+  max_size            = 4
   vpc_zone_identifier = var.subnet_ids
 
   target_group_arns = [var.alb_target_group_arn]
