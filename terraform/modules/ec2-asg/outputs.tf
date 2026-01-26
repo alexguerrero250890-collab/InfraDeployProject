@@ -8,18 +8,8 @@ output "asg_sg_id" {
   value       = aws_security_group.this.id
 }
 
-output "desired_capacity" {
-  description = "Capacidad deseada del ASG"
-  value       = aws_autoscaling_group.this.desired_capacity
-}
-
-output "scale_out_policy_arn" {
-  description = "ARN de la policy de scale out"
-  value       = aws_autoscaling_policy.scale_out.arn
-}
-
-output "scale_in_policy_arn" {
-  description = "ARN de la policy de scale in"
-  value       = aws_autoscaling_policy.scale_in.arn
+output "instance_profile_name" {
+  description = "Instance Profile usado por las EC2"
+  value       = aws_iam_instance_profile.this.name
 }
 

@@ -100,14 +100,13 @@ module "rds" {
 }
 
 # ===============================
-# ASG
+# ASG (sin SSH, con SSM)
 # ===============================
 module "autoscaling" {
   source        = "./terraform/modules/ec2-asg"
   project_name  = var.project_name
   ami_id        = var.ami_id
   instance_type = var.instance_type
-  key_name      = "KP"
   subnet_ids    = module.vpc.public_subnet_ids
   vpc_id        = module.vpc.vpc_id
 

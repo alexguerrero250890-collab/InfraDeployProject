@@ -5,6 +5,7 @@ resource "aws_security_group" "this" {
   name   = "${var.project_name}-asg-sg"
   vpc_id = var.vpc_id
 
+  # Solo tráfico HTTP desde el ALB
   ingress {
     from_port       = 80
     to_port         = 80
@@ -12,13 +13,7 @@ resource "aws_security_group" "this" {
     security_groups = [var.alb_sg_id]
   }
 
-  ingress {
-    from_port   = 22
-    to_port     = 22
-    protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-
+  # Egress libre (necesario para SSM, yum/dnf, etc.)
   egress {
     from_port   = 0
     to_port     = 0
@@ -32,24 +27,85 @@ resource "aws_security_group" "this" {
 }
 
 # =========================
+# IAM Role para EC2 (SSM)
+# =========================
+resource "aws_iam_role" "ec2_ssm_role" {
+  name = "${var.project_name}-ec2-ssm-role"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Principal = {
+          Service = "ec2.amazonaws.com"
+        }
+        Action = "sts:AssumeRole"
+      }
+    ]
+  })
+}
+
+# =========================
+# Attach AmazonSSMManagedInstanceCore
+# =========================
+resource "aws_iam_role_policy_attachment" "ssm_core" {
+  role       = aws_iam_role.ec2_ssm_role.name
+  policy_arn = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
+}
+
+# =========================
+# Instance Profile
+# =========================
+resource "aws_iam_instance_profile" "this" {
+  name = "${var.project_name}-ec2-instance-profile"
+  role = aws_iam_role.ec2_ssm_role.name
+}
+
+# =========================
 # Launch Template
 # =========================
 resource "aws_launch_template" "this" {
   name_prefix   = "${var.project_name}-lt-"
   image_id      = var.ami_id
   instance_type = var.instance_type
-  key_name      = var.key_name
+
+  iam_instance_profile {
+    name = aws_iam_instance_profile.this.name
+  }
 
   vpc_security_group_ids = [aws_security_group.this.id]
 
   user_data = base64encode(<<EOF
 #!/bin/bash
-yum install -y httpd
-systemctl start httpd
+set -e
+
+# Actualizar sistema
+dnf update -y
+
+# Instalar Apache
+dnf install -y httpd
+
+# Habilitar y arrancar Apache
 systemctl enable httpd
+systemctl start httpd
+
+# Página de prueba
 echo "ASG Instance - $(hostname)" > /var/www/html/index.html
+
+# SSM Agent (por seguridad, AL2023 ya lo trae)
+systemctl enable amazon-ssm-agent
+systemctl start amazon-ssm-agent
 EOF
   )
+
+  tag_specifications {
+    resource_type = "instance"
+
+    tags = {
+      Name = "${var.project_name}-asg-instance"
+    }
+  }
 }
 
 # =========================
@@ -76,7 +132,8 @@ resource "aws_autoscaling_group" "this" {
   }
 
   depends_on = [
-    aws_security_group.this
+    aws_security_group.this,
+    aws_iam_instance_profile.this
   ]
 }
 
