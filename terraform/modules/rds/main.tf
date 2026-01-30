@@ -1,23 +1,29 @@
 resource "aws_db_subnet_group" "this" {
   name       = "${var.db_name}-subnet-group"
-  subnet_ids = var.subnet_ids
+  subnet_ids = var.subnet_ids  # SOLO subnets privadas
 
   tags = {
     Name = "${var.db_name}-subnet-group"
+  }
+
+  lifecycle {
+    ignore_changes = [
+      subnet_ids
+    ]
   }
 }
 
 resource "aws_security_group" "rds" {
   name        = "${var.project_name}-rds-sg"
-  description = "Allow PostgreSQL from EC2"
-  vpc_id      = var.vpc_id
+  description = "Allow PostgreSQL from EC2, ASG and Bastion"
+  vpc_id      = var.vpc_id  # MISMA VPC que EC2
 
   ingress {
-    description     = "Postgres from EC2"
     from_port       = 5432
     to_port         = 5432
     protocol        = "tcp"
-    security_groups = var.allowed_security_group_ids
+    security_groups = concat(var.allowed_security_group_ids, var.asg_sg_ids, [var.bastion_sg_id])
+    description     = "Allow Postgres from EC2, ASG and Bastion"
   }
 
   egress {
@@ -49,17 +55,20 @@ resource "aws_db_instance" "this" {
   vpc_security_group_ids = [aws_security_group.rds.id]
   db_subnet_group_name   = aws_db_subnet_group.this.name
 
-  publicly_accessible = false
-  multi_az            = false
-
-  # 🔐 BACKUPS (bajo costo)
+  publicly_accessible     = false
+  multi_az                = false
   backup_retention_period = 7
   backup_window           = "03:00-04:00"
-
-  # 🛠️ MANTENIMIENTO (NO se solapa)
-  maintenance_window = "sun:05:00-sun:06:00"
+  maintenance_window      = "sun:05:00-sun:06:00"
 
   skip_final_snapshot = true
   deletion_protection = false
+
+  lifecycle {
+    ignore_changes = [
+      endpoint,
+      status
+    ]
+  }
 }
 

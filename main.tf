@@ -78,28 +78,6 @@ module "ec2" {
 }
 
 # ===============================
-# RDS
-# ===============================
-module "rds" {
-  source = "./terraform/modules/rds"
-
-  project_name = var.project_name
-
-  db_name           = var.db_name
-  db_username       = var.db_username
-  db_password       = var.db_password
-  instance_class    = var.db_instance_class
-  allocated_storage = var.db_allocated_storage
-
-  subnet_ids = module.vpc.private_subnet_ids
-  vpc_id     = module.vpc.vpc_id
-
-  allowed_security_group_ids = [
-    module.ec2.ec2_sg_id
-  ]
-}
-
-# ===============================
 # ASG (sin SSH, con SSM)
 # ===============================
 module "autoscaling" {
@@ -113,8 +91,36 @@ module "autoscaling" {
   alb_target_group_arn = module.alb.target_group_arn
   alb_sg_id            = module.alb.alb_sg_id
 
-  min_size         = 0
-  desired_capacity = 0
+  min_size         = 2
+  desired_capacity = 2
+}
+
+# ===============================
+# RDS en la misma VPC y subnets privadas
+# ===============================
+module "rds" {
+  source = "./terraform/modules/rds"
+
+  project_name = var.project_name
+
+  db_name           = var.db_name
+  db_username       = var.db_username
+  db_password       = var.db_password
+  instance_class    = var.db_instance_class
+  allocated_storage = var.db_allocated_storage
+
+  # ✅ Solo subnets privadas
+  subnet_ids = module.vpc.private_subnet_ids
+
+  # ✅ Misma VPC que EC2 / ASG
+  vpc_id = module.vpc.vpc_id
+
+  allowed_security_group_ids = [
+    module.ec2.ec2_sg_id
+  ]
+
+  asg_sg_ids    = [module.autoscaling.asg_sg_id]
+  bastion_sg_id = "sg-0ecf768e64d89b4d2"
 }
 
 # ===============================

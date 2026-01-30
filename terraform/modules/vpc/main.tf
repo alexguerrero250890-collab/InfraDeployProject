@@ -1,13 +1,16 @@
 resource "aws_vpc" "this" {
   cidr_block = var.vpc_cidr
 
+  enable_dns_support   = true
+  enable_dns_hostnames = true
+
   tags = {
     Name = "${var.project_name}-vpc"
   }
 }
 
 # ===============================
-# Public Subnets (MULTI)
+# Public Subnets
 # ===============================
 resource "aws_subnet" "public" {
   for_each = {
@@ -26,7 +29,7 @@ resource "aws_subnet" "public" {
 }
 
 # ===============================
-# Private Subnets
+# Private Subnets (RDS)
 # ===============================
 resource "aws_subnet" "private" {
   for_each = {
@@ -43,6 +46,9 @@ resource "aws_subnet" "private" {
   }
 }
 
+# ===============================
+# Internet Gateway (Public)
+# ===============================
 resource "aws_internet_gateway" "this" {
   vpc_id = aws_vpc.this.id
 
@@ -51,6 +57,34 @@ resource "aws_internet_gateway" "this" {
   }
 }
 
+# ===============================
+# Elastic IP for NAT
+# ===============================
+resource "aws_eip" "nat" {
+  domain = "vpc"
+
+  tags = {
+    Name = "${var.project_name}-nat-eip"
+  }
+}
+
+# ===============================
+# NAT Gateway (Public Subnet 0)
+# ===============================
+resource "aws_nat_gateway" "this" {
+  allocation_id = aws_eip.nat.id
+  subnet_id     = aws_subnet.public[0].id
+
+  tags = {
+    Name = "${var.project_name}-nat"
+  }
+
+  depends_on = [aws_internet_gateway.this]
+}
+
+# ===============================
+# Public Route Table
+# ===============================
 resource "aws_route_table" "public" {
   vpc_id = aws_vpc.this.id
 
@@ -69,5 +103,28 @@ resource "aws_route_table_association" "public" {
 
   subnet_id      = each.value.id
   route_table_id = aws_route_table.public.id
+}
+
+# ===============================
+# Private Route Table (🔥 FIX 🔥)
+# ===============================
+resource "aws_route_table" "private" {
+  vpc_id = aws_vpc.this.id
+
+  route {
+    cidr_block     = "0.0.0.0/0"
+    nat_gateway_id = aws_nat_gateway.this.id
+  }
+
+  tags = {
+    Name = "${var.project_name}-private-rt"
+  }
+}
+
+resource "aws_route_table_association" "private" {
+  for_each = aws_subnet.private
+
+  subnet_id      = each.value.id
+  route_table_id = aws_route_table.private.id
 }
 
