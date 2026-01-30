@@ -10,6 +10,8 @@ crash.log
 *.pem
 *.key
 *.env
+*.rpm
+*.swp
 
 # Editor folders (opcional)
 .vscode/
