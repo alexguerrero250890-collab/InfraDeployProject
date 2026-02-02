@@ -16,12 +16,12 @@ jobs:
     runs-on: ubuntu-latest
 
     env:
-      TF_ROOT: environments/dev
+      TF_ROOT: ./environments/dev
       TF_VAR_project_name: InfraDeploy-Dev
       AWS_REGION: eu-north-1
 
     steps:
-      - name: Checkout repo
+      - name: Checkout repository
         uses: actions/checkout@v3
 
       - name: Setup Terraform
