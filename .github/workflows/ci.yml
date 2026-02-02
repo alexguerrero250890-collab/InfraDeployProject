@@ -16,7 +16,7 @@ jobs:
     runs-on: ubuntu-latest
 
     env:
-      TF_ROOT: ./environments/dev/terraform
+      TF_ROOT: environments/dev
       TF_VAR_project_name: InfraDeploy-Dev
       AWS_REGION: eu-north-1
 
