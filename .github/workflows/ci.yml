@@ -21,7 +21,7 @@ jobs:
       AWS_REGION: eu-north-1
 
     steps:
-      - name: Checkout repository
+      - name: Checkout repo
         uses: actions/checkout@v3
 
       - name: Setup Terraform
@@ -50,3 +50,4 @@ jobs:
         with:
           name: terraform-plan
           path: ${{ env.TF_ROOT }}/tfplan
+
