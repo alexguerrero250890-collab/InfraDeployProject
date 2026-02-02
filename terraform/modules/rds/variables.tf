@@ -56,3 +56,9 @@ variable "project_name" {
   description = "Nombre del proyecto para tags y nombres de recursos"
 }
 
+variable "multi_az" {
+  type        = bool
+  description = "Habilitar RDS Multi-AZ"
+  default     = true
+}
+

@@ -49,3 +49,7 @@ variable "db_allocated_storage" {
   default = 20
 }
 
+variable "db_multi_az" {
+  type = bool
+}
+
