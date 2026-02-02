@@ -24,7 +24,7 @@ resource "aws_security_group" "this" {
     from_port       = 5432
     to_port         = 5432
     protocol        = "tcp"
-    security_groups = [var.asg_sg_id]  # <-- Aquí ponemos el SG de tu ASG
+    security_groups = [var.asg_sg_id] # <-- Aquí ponemos el SG de tu ASG
   }
 
   # Todo el tráfico de salida permitido
