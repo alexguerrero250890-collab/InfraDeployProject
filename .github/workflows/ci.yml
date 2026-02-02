@@ -1,0 +1,53 @@
+name: CI Terraform
+
+on:
+  push:
+    branches:
+      - dev
+      - 'dev-stable-*'
+  pull_request:
+    branches:
+      - dev
+      - 'dev-stable-*'
+
+jobs:
+  terraform:
+    name: Terraform Plan
+    runs-on: ubuntu-latest
+
+    env:
+      TF_ROOT: ./environments/dev/terraform
+      TF_VAR_project_name: InfraDeploy-Dev
+      AWS_REGION: eu-north-1
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v3
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v2
+        with:
+          terraform_version: 1.6.5
+
+      - name: Terraform Init
+        working-directory: ${{ env.TF_ROOT }}
+        run: terraform init -input=false
+
+      - name: Terraform Format Check
+        working-directory: ${{ env.TF_ROOT }}
+        run: terraform fmt -check
+
+      - name: Terraform Validate
+        working-directory: ${{ env.TF_ROOT }}
+        run: terraform validate
+
+      - name: Terraform Plan
+        working-directory: ${{ env.TF_ROOT }}
+        run: terraform plan -out=tfplan -input=false
+
+      - name: Upload Plan Artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: terraform-plan
+          path: ${{ env.TF_ROOT }}/tfplan
+
