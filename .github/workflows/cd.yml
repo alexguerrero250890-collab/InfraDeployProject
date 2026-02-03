@@ -1,0 +1,51 @@
+name: InfraDeploy CD
+
+# Solo se ejecuta manualmente desde GitHub Actions
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Elige el environment: dev, staging, prod"
+        required: true
+        default: dev
+      apply:
+        description: "Aplicar cambios Terraform"
+        required: false
+        default: "false"
+
+# Variables de entorno comunes para Terraform y AWS
+env:
+  TF_ROOT: .
+  TF_VAR_project_name: InfraDeploy-Dev
+  AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+  AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+  AWS_REGION: ${{ secrets.AWS_REGION }}
+
+jobs:
+  apply:
+    name: Terraform Apply (Manual Approval)
+    runs-on: ubuntu-latest
+    environment:
+      # GitHub pedirá aprobación según el environment elegido
+      name: ${{ github.event.inputs.environment }}
+
+    steps:
+      # 1️⃣ Clonar el repositorio
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # 2️⃣ Configurar Terraform
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+
+      # 3️⃣ Inicializar Terraform
+      - name: Terraform Init
+        working-directory: ${{ env.TF_ROOT }}
+        run: terraform init
+
+      # 4️⃣ Aplicar Terraform solo si se indicó apply=true
+      - name: Terraform Apply
+        if: ${{ github.event.inputs.apply == 'true' }}
+        working-directory: ${{ env.TF_ROOT }}
+        run: terraform apply -auto-approve
+

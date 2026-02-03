@@ -1,0 +1,55 @@
+name: InfraDeploy CI
+
+# Se ejecuta automáticamente en cada push o PR sobre ramas dev o dev-stable-*
+on:
+  push:
+    branches:
+      - dev
+      - dev-stable-*
+  pull_request:
+    branches:
+      - dev
+      - dev-stable-*
+
+# Variables de entorno comunes para Terraform y AWS
+env:
+  TF_ROOT: .
+  TF_VAR_project_name: InfraDeploy-Dev
+  AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+  AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+  AWS_REGION: ${{ secrets.AWS_REGION }}
+
+jobs:
+  terraform:
+    name: Terraform Validation
+    runs-on: ubuntu-latest
+
+    steps:
+      # 1️⃣ Clonar el repositorio
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # 2️⃣ Configurar Terraform
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+
+      # 3️⃣ Inicializar Terraform
+      - name: Terraform Init
+        working-directory: ${{ env.TF_ROOT }}
+        run: terraform init
+
+      # 4️⃣ Revisar formato
+      - name: Terraform Format
+        working-directory: ${{ env.TF_ROOT }}
+        run: terraform fmt -check
+
+      # 5️⃣ Validar sintaxis de Terraform
+      - name: Terraform Validate
+        working-directory: ${{ env.TF_ROOT }}
+        run: terraform validate
+
+      # 6️⃣ Generar plan (sin aplicar)
+      - name: Terraform Plan
+        working-directory: ${{ env.TF_ROOT }}
+        run: terraform plan -out=tfplan
+
