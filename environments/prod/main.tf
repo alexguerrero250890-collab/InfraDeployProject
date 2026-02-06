@@ -25,13 +25,13 @@ provider "aws" {
 # VPC
 # ===============================
 module "vpc" {
-  source       = "../../terraform/modules/vpc"
+  source       = "../terraform/modules/vpc"
   project_name = var.project_name
   environment  = var.environment
 
-  vpc_cidr             = "10.0.0.0/16"
-  public_subnet_cidrs  = ["10.0.1.0/24", "10.0.2.0/24"]
-  private_subnet_cidrs = ["10.0.3.0/24", "10.0.4.0/24"]
+  vpc_cidr             = "10.2.0.0/16"
+  public_subnet_cidrs  = ["10.2.1.0/24", "10.2.2.0/24"]
+  private_subnet_cidrs = ["10.2.3.0/24", "10.2.4.0/24"]
 
   availability_zones = ["eu-north-1a", "eu-north-1b"]
 }
@@ -40,9 +40,9 @@ module "vpc" {
 # ROUTE53
 # ===============================
 module "route53" {
-  source       = "../../terraform/modules/route53"
+  source       = "../terraform/modules/route53"
   project_name = var.project_name
-  environment  = "prod"
+  environment  = var.environment
   domain_name  = "infraproj.com"
 }
 
@@ -50,10 +50,10 @@ module "route53" {
 # ACM
 # ===============================
 module "acm" {
-  source         = "../../terraform/modules/acm"
+  source         = "../terraform/modules/acm"
   project_name   = var.project_name
-  environment    = "prod"
-  domain_name    = "prod.infraproj.com"
+  environment    = var.environment
+  domain_name    = "infraproj.com"
   hosted_zone_id = module.route53.zone_id
 }
 
@@ -61,9 +61,9 @@ module "acm" {
 # ALB
 # ===============================
 module "alb" {
-  source              = "../../terraform/modules/alb"
+  source              = "../terraform/modules/alb"
   project_name        = var.project_name
-  environment         = "prod"
+  environment         = var.environment
   subnet_ids          = module.vpc.public_subnet_ids
   vpc_id              = module.vpc.vpc_id
   acm_certificate_arn = module.acm.certificate_arn
@@ -73,9 +73,9 @@ module "alb" {
 # EC2 SG
 # ===============================
 module "ec2" {
-  source       = "../../terraform/modules/ec2"
+  source       = "../terraform/modules/ec2"
   project_name = var.project_name
-  environment  = "prod"
+  environment  = var.environment
   vpc_id       = module.vpc.vpc_id
   alb_sg_id    = module.alb.alb_sg_id
 }
@@ -84,9 +84,9 @@ module "ec2" {
 # ASG
 # ===============================
 module "autoscaling" {
-  source        = "../../terraform/modules/ec2-asg"
+  source        = "../terraform/modules/ec2-asg"
   project_name  = var.project_name
-  environment   = "prod"
+  environment   = var.environment
   ami_id        = var.ami_id
   instance_type = var.instance_type
   subnet_ids    = module.vpc.public_subnet_ids
@@ -100,13 +100,13 @@ module "autoscaling" {
 }
 
 # ===============================
-# RDS
+# RDS (SIN bastion hardcodeado)
 # ===============================
 module "rds" {
-  source = "../../terraform/modules/rds"
+  source = "../terraform/modules/rds"
 
   project_name = var.project_name
-  environment  = "prod"
+  environment  = var.environment
 
   db_name           = var.db_name
   db_username       = var.db_username
@@ -121,16 +121,15 @@ module "rds" {
     module.ec2.ec2_sg_id
   ]
 
-  asg_sg_ids    = [module.autoscaling.asg_sg_id]
-  bastion_sg_id = "sg-0ecf768e64d89b4d2"
+  asg_sg_ids = [module.autoscaling.asg_sg_id]
 }
 
 # ===============================
-# Route53 record para ALB
+# Route53 record
 # ===============================
 resource "aws_route53_record" "alb_prod" {
   zone_id = module.route53.zone_id
-  name    = "prod"
+  name    = "@"
   type    = "A"
 
   alias {
