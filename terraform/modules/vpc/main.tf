@@ -5,13 +5,11 @@ resource "aws_vpc" "this" {
   enable_dns_hostnames = true
 
   tags = {
-    Name = "${var.project_name}-vpc"
+    Name        = "${var.project_name}-${var.environment}-vpc"
+    Environment = var.environment
   }
 }
 
-# ===============================
-# Public Subnets
-# ===============================
 resource "aws_subnet" "public" {
   for_each = {
     for idx, cidr in var.public_subnet_cidrs :
@@ -24,13 +22,11 @@ resource "aws_subnet" "public" {
   map_public_ip_on_launch = true
 
   tags = {
-    Name = "${var.project_name}-public-subnet-${each.key + 1}"
+    Name        = "${var.project_name}-${var.environment}-public-subnet-${each.key + 1}"
+    Environment = var.environment
   }
 }
 
-# ===============================
-# Private Subnets (RDS)
-# ===============================
 resource "aws_subnet" "private" {
   for_each = {
     for idx, cidr in var.private_subnet_cidrs :
@@ -42,49 +38,41 @@ resource "aws_subnet" "private" {
   availability_zone = var.availability_zones[each.key]
 
   tags = {
-    Name = "${var.project_name}-private-subnet-${each.key + 1}"
+    Name        = "${var.project_name}-${var.environment}-private-subnet-${each.key + 1}"
+    Environment = var.environment
   }
 }
 
-# ===============================
-# Internet Gateway (Public)
-# ===============================
 resource "aws_internet_gateway" "this" {
   vpc_id = aws_vpc.this.id
 
   tags = {
-    Name = "${var.project_name}-igw"
+    Name        = "${var.project_name}-${var.environment}-igw"
+    Environment = var.environment
   }
 }
 
-# ===============================
-# Elastic IP for NAT
-# ===============================
 resource "aws_eip" "nat" {
   domain = "vpc"
 
   tags = {
-    Name = "${var.project_name}-nat-eip"
+    Name        = "${var.project_name}-${var.environment}-nat-eip"
+    Environment = var.environment
   }
 }
 
-# ===============================
-# NAT Gateway (Public Subnet 0)
-# ===============================
 resource "aws_nat_gateway" "this" {
   allocation_id = aws_eip.nat.id
   subnet_id     = aws_subnet.public[0].id
 
   tags = {
-    Name = "${var.project_name}-nat"
+    Name        = "${var.project_name}-${var.environment}-nat"
+    Environment = var.environment
   }
 
   depends_on = [aws_internet_gateway.this]
 }
 
-# ===============================
-# Public Route Table
-# ===============================
 resource "aws_route_table" "public" {
   vpc_id = aws_vpc.this.id
 
@@ -94,7 +82,8 @@ resource "aws_route_table" "public" {
   }
 
   tags = {
-    Name = "${var.project_name}-public-rt"
+    Name        = "${var.project_name}-${var.environment}-public-rt"
+    Environment = var.environment
   }
 }
 
@@ -105,9 +94,6 @@ resource "aws_route_table_association" "public" {
   route_table_id = aws_route_table.public.id
 }
 
-# ===============================
-# Private Route Table (🔥 FIX 🔥)
-# ===============================
 resource "aws_route_table" "private" {
   vpc_id = aws_vpc.this.id
 
@@ -117,7 +103,8 @@ resource "aws_route_table" "private" {
   }
 
   tags = {
-    Name = "${var.project_name}-private-rt"
+    Name        = "${var.project_name}-${var.environment}-private-rt"
+    Environment = var.environment
   }
 }
 

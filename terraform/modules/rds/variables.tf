@@ -62,3 +62,8 @@ variable "multi_az" {
   default     = true
 }
 
+variable "environment" {
+  type        = string
+  description = "Environment name (dev, staging, prod)"
+}
+

@@ -17,4 +17,9 @@ variable "acm_certificate_arn" {
   description = "ARN del certificado ACM para HTTPS"
   type        = string
 }
+ 
+variable "environment" {
+  type        = string
+  description = "Environment name (dev, staging, prod)"
+}
 

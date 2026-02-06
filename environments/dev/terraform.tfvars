@@ -2,6 +2,7 @@
 # Configuración global
 # ========================
 aws_region   = "eu-north-1"
+environment  = "dev"
 project_name = "InfraDeploy-Dev"
 
 # ========================

@@ -1,9 +1,8 @@
 resource "aws_security_group" "this" {
-  name        = "${var.project_name}-sg"
-  description = "Security group for Dev environment"
+  name        = "${var.project_name}-${var.environment}-sg"
+  description = "Security group"
   vpc_id      = var.vpc_id
 
-  # SSH desde cualquier lugar
   ingress {
     from_port   = 22
     to_port     = 22
@@ -11,7 +10,6 @@ resource "aws_security_group" "this" {
     cidr_blocks = ["0.0.0.0/0"]
   }
 
-  # HTTP desde cualquier lugar
   ingress {
     from_port   = 80
     to_port     = 80
@@ -19,15 +17,13 @@ resource "aws_security_group" "this" {
     cidr_blocks = ["0.0.0.0/0"]
   }
 
-  # Acceso a PostgreSQL desde las instancias del ASG
   ingress {
     from_port       = 5432
     to_port         = 5432
     protocol        = "tcp"
-    security_groups = [var.asg_sg_id] # <-- Aquí ponemos el SG de tu ASG
+    security_groups = [var.asg_sg_id]
   }
 
-  # Todo el tráfico de salida permitido
   egress {
     from_port   = 0
     to_port     = 0
@@ -36,7 +32,8 @@ resource "aws_security_group" "this" {
   }
 
   tags = {
-    Name = "${var.project_name}-sg"
+    Name        = "${var.project_name}-${var.environment}-sg"
+    Environment = var.environment
   }
 }
 
