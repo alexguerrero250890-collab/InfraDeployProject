@@ -1,0 +1,53 @@
+name: InfraDeploy CI (Plan)
+
+on:
+  pull_request:
+    branches:
+      - dev
+      - dev-stable-*
+  push:
+    branches:
+      - dev
+      - dev-stable-*
+
+permissions:
+  contents: read
+
+env:
+  AWS_REGION: eu-north-1
+
+jobs:
+  plan:
+    name: Terraform Plan (${{ matrix.env }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        env: [dev, staging, prod]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-region: ${{ env.AWS_REGION }}
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+
+      - name: Terraform fmt (repo)
+        run: terraform fmt -check -recursive
+
+      - name: Terraform init
+        run: terraform -chdir=environments/${{ matrix.env }} init
+
+      - name: Terraform validate
+        run: terraform -chdir=environments/${{ matrix.env }} validate
+
+      - name: Terraform plan
+        run: terraform -chdir=environments/${{ matrix.env }} plan -no-color
+
