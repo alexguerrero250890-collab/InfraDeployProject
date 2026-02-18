@@ -49,6 +49,7 @@ variable "asg_sg_ids" {
 variable "bastion_sg_id" {
   type        = string
   description = "Security Group de la EC2 bastión que puede conectarse al RDS"
+  default     = null
 }
 
 variable "project_name" {

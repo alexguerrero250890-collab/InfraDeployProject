@@ -25,32 +25,32 @@ provider "aws" {
 # VPC
 # ===============================
 module "vpc" {
-  source       = "../terraform/modules/vpc"
+  source       = "../../terraform/modules/vpc"
   project_name = var.project_name
   environment  = var.environment
 
-  vpc_cidr             = "10.1.0.0/16"
-  public_subnet_cidrs  = ["10.1.1.0/24", "10.1.2.0/24"]
-  private_subnet_cidrs = ["10.1.3.0/24", "10.1.4.0/24"]
+  vpc_cidr             = "10.10.0.0/16"
+  public_subnet_cidrs  = ["10.10.1.0/24", "10.10.2.0/24"]
+  private_subnet_cidrs = ["10.10.3.0/24", "10.10.4.0/24"]
 
   availability_zones = ["eu-north-1a", "eu-north-1b"]
 }
 
 # ===============================
-# ROUTE53
+# ROUTE53 (zona existente)
 # ===============================
 module "route53" {
-  source       = "../terraform/modules/route53"
+  source       = "../../terraform/modules/route53"
   project_name = var.project_name
   environment  = var.environment
   domain_name  = "infraproj.com"
 }
 
 # ===============================
-# ACM
+# ACM (certificado HTTPS)
 # ===============================
 module "acm" {
-  source         = "../terraform/modules/acm"
+  source         = "../../terraform/modules/acm"
   project_name   = var.project_name
   environment    = var.environment
   domain_name    = "staging.infraproj.com"
@@ -58,10 +58,10 @@ module "acm" {
 }
 
 # ===============================
-# ALB
+# ALB (HTTP/HTTPS con ACM)
 # ===============================
 module "alb" {
-  source              = "../terraform/modules/alb"
+  source              = "../../terraform/modules/alb"
   project_name        = var.project_name
   environment         = var.environment
   subnet_ids          = module.vpc.public_subnet_ids
@@ -70,10 +70,10 @@ module "alb" {
 }
 
 # ===============================
-# EC2 SG
+# EC2 SG (para ASG)
 # ===============================
 module "ec2" {
-  source       = "../terraform/modules/ec2"
+  source       = "../../terraform/modules/ec2"
   project_name = var.project_name
   environment  = var.environment
   vpc_id       = module.vpc.vpc_id
@@ -81,10 +81,10 @@ module "ec2" {
 }
 
 # ===============================
-# ASG
+# ASG (sin SSH, con SSM)
 # ===============================
 module "autoscaling" {
-  source        = "../terraform/modules/ec2-asg"
+  source        = "../../terraform/modules/ec2-asg"
   project_name  = var.project_name
   environment   = var.environment
   ami_id        = var.ami_id
@@ -95,15 +95,15 @@ module "autoscaling" {
   alb_target_group_arn = module.alb.target_group_arn
   alb_sg_id            = module.alb.alb_sg_id
 
-  min_size         = 0
-  desired_capacity = 0
+  min_size         = 2
+  desired_capacity = 2
 }
 
 # ===============================
-# RDS (SIN bastion hardcodeado)
+# RDS en la misma VPC y subnets privadas
 # ===============================
 module "rds" {
-  source = "../terraform/modules/rds"
+  source = "../../terraform/modules/rds"
 
   project_name = var.project_name
   environment  = var.environment
@@ -121,16 +121,19 @@ module "rds" {
     module.ec2.ec2_sg_id
   ]
 
-  asg_sg_ids = [module.autoscaling.asg_sg_id]
+  asg_sg_ids    = [module.autoscaling.asg_sg_id]
+  bastion_sg_id = module.autoscaling.asg_sg_id
 }
 
 # ===============================
-# Route53 record
+# Route53 record para ALB
 # ===============================
 resource "aws_route53_record" "alb_staging" {
   zone_id = module.route53.zone_id
   name    = "staging"
   type    = "A"
+
+  allow_overwrite = true
 
   alias {
     name                   = module.alb.dns_name

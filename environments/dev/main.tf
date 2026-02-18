@@ -25,7 +25,7 @@ provider "aws" {
 # VPC
 # ===============================
 module "vpc" {
-  source       = "./terraform/modules/vpc"
+  source       = "../../terraform/modules/vpc"
   project_name = var.project_name
   environment  = var.environment
 
@@ -40,7 +40,7 @@ module "vpc" {
 # ROUTE53 (usamos zona existente)
 # ===============================
 module "route53" {
-  source       = "./terraform/modules/route53"
+  source       = "../../terraform/modules/route53"
   project_name = var.project_name
   environment  = "dev"
   domain_name  = "infraproj.com"
@@ -50,7 +50,7 @@ module "route53" {
 # ACM (certificado HTTPS)
 # ===============================
 module "acm" {
-  source         = "./terraform/modules/acm"
+  source         = "../../terraform/modules/acm"
   project_name   = var.project_name
   environment    = "dev"
   domain_name    = "dev.infraproj.com"
@@ -61,7 +61,7 @@ module "acm" {
 # ALB (HTTP → HTTPS, HTTPS con ACM)
 # ===============================
 module "alb" {
-  source              = "./terraform/modules/alb"
+  source              = "../../terraform/modules/alb"
   project_name        = var.project_name
   environment         = var.environment
   subnet_ids          = module.vpc.public_subnet_ids
@@ -73,7 +73,7 @@ module "alb" {
 # EC2 SG (para ASG)
 # ===============================
 module "ec2" {
-  source       = "./terraform/modules/ec2"
+  source       = "../../terraform/modules/ec2"
   project_name = var.project_name
   environment  = var.environment
   vpc_id       = module.vpc.vpc_id
@@ -84,9 +84,9 @@ module "ec2" {
 # ASG (sin SSH, con SSM)
 # ===============================
 module "autoscaling" {
-  source        = "./terraform/modules/ec2-asg"
+  source        = "../../terraform/modules/ec2-asg"
   project_name  = var.project_name
-  environment   = var.environment  
+  environment   = var.environment
   ami_id        = var.ami_id
   instance_type = var.instance_type
   subnet_ids    = module.vpc.public_subnet_ids
@@ -103,7 +103,7 @@ module "autoscaling" {
 # RDS en la misma VPC y subnets privadas
 # ===============================
 module "rds" {
-  source = "./terraform/modules/rds"
+  source = "../../terraform/modules/rds"
 
   project_name = var.project_name
   environment  = var.environment
@@ -114,11 +114,8 @@ module "rds" {
   instance_class    = var.db_instance_class
   allocated_storage = var.db_allocated_storage
 
-  # Solo subnets privadas
   subnet_ids = module.vpc.private_subnet_ids
-
-  # Misma VPC que EC2 / ASG
-  vpc_id = module.vpc.vpc_id
+  vpc_id     = module.vpc.vpc_id
 
   allowed_security_group_ids = [
     module.ec2.ec2_sg_id

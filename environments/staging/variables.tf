@@ -7,7 +7,7 @@ variable "aws_region" {
 variable "project_name" {
   description = "Project name"
   type        = string
-  default     = "InfraDeploy"
+  default     = "InfraDeploy-Staging"
 }
 
 variable "instance_type" {
@@ -52,7 +52,7 @@ variable "db_allocated_storage" {
 variable "db_multi_az" {
   type = bool
 }
- 
+
 variable "environment" {
   description = "Deployment environment (dev, staging, prod)"
   type        = string

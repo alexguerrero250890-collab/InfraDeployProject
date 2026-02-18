@@ -51,6 +51,19 @@ resource "aws_launch_template" "this" {
 
   vpc_security_group_ids = [aws_security_group.this.id]
 
+  # Bootstrap: install and start Apache on port 80 for ALB health checks
+  # Amazon Linux 2023 uses dnf
+  user_data = base64encode(<<-EOF
+    #!/bin/bash
+    set -euxo pipefail
+
+    dnf install -y httpd
+    systemctl enable --now httpd
+
+    echo "Hello from $(hostname -f) - $(date)" > /var/www/html/index.html
+  EOF
+  )
+
   tag_specifications {
     resource_type = "instance"
     tags = {
@@ -58,6 +71,8 @@ resource "aws_launch_template" "this" {
       Environment = var.environment
     }
   }
+
+  depends_on = [aws_iam_instance_profile.this]
 }
 
 resource "aws_autoscaling_group" "this" {
@@ -66,7 +81,13 @@ resource "aws_autoscaling_group" "this" {
   min_size            = var.min_size
   max_size            = 4
   vpc_zone_identifier = var.subnet_ids
-  target_group_arns  = [var.alb_target_group_arn]
+
+  # Attach ASG to ALB Target Group
+  target_group_arns = [var.alb_target_group_arn]
+
+  # Use ALB/TG health checks (recommended)
+  health_check_type         = "ELB"
+  health_check_grace_period = 120
 
   launch_template {
     id      = aws_launch_template.this.id
@@ -76,6 +97,12 @@ resource "aws_autoscaling_group" "this" {
   tag {
     key                 = "Name"
     value               = "${var.project_name}-${var.environment}-asg"
+    propagate_at_launch = true
+  }
+
+  tag {
+    key                 = "Environment"
+    value               = var.environment
     propagate_at_launch = true
   }
 }

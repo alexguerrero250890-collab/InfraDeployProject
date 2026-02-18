@@ -7,7 +7,7 @@ variable "aws_region" {
 variable "project_name" {
   description = "Project name"
   type        = string
-  default     = "InfraDeploy"
+  default     = "InfraDeploy-Prod"
 }
 
 variable "instance_type" {
@@ -41,12 +41,12 @@ variable "db_password" {
 
 variable "db_instance_class" {
   type    = string
-  default = "db.t3.micro"
+  default = "db.t3.small"
 }
 
 variable "db_allocated_storage" {
   type    = number
-  default = 20
+  default = 50
 }
 
 variable "db_multi_az" {

@@ -5,8 +5,20 @@ output "rds_endpoint" {
   value = module.rds.db_endpoint
 }
 
-output "psql_command" {
+output "rds_proxy_name" {
+  value = module.rds.rds_proxy_name
+}
+
+output "rds_proxy_endpoint" {
+  value = module.rds.rds_proxy_endpoint
+}
+
+output "psql_command_rds" {
   value = "psql -h ${module.rds.db_endpoint} -U ${var.db_username} -d ${var.db_name}"
+}
+
+output "psql_command_proxy" {
+  value = "psql \"host=${module.rds.rds_proxy_endpoint} user=${var.db_username} dbname=${var.db_name} sslmode=require\""
 }
 
 output "rds_security_group_id" {
