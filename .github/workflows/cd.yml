@@ -18,6 +18,7 @@ permissions:
 env:
   AWS_REGION: eu-north-1
 
+# Evita ejecuciones simultáneas por environment
 concurrency:
   group: infradeploy-cd-${{ inputs.environment }}
   cancel-in-progress: false
@@ -27,6 +28,7 @@ jobs:
     name: Terraform Apply (${{ inputs.environment }})
     runs-on: ubuntu-latest
 
+    # Activa GitHub Environments (approvals si están configurados)
     environment: ${{ inputs.environment }}
 
     steps:
@@ -55,7 +57,7 @@ jobs:
           set -euo pipefail
           terraform -chdir=environments/${{ inputs.environment }} init -reconfigure
 
-      # 🔥 CRÍTICO: seleccionar workspace correcto
+      # Selección automática del workspace correcto
       - name: Select Terraform workspace
         run: |
           set -euo pipefail
@@ -65,12 +67,13 @@ jobs:
       - name: Show current workspace
         run: terraform -chdir=environments/${{ inputs.environment }} workspace show
 
-      # 🔎 Verificación de state (evita recreaciones accidentales)
+      # Sanity check SIN head directo (evita EPIPE)
       - name: Terraform state sanity check
         run: |
           set -euo pipefail
-          terraform -chdir=environments/${{ inputs.environment }} state list | head -n 50
-          terraform -chdir=environments/${{ inputs.environment }} state list | grep -q "module.alb.aws_lb.this"
+          terraform -chdir=environments/${{ inputs.environment }} state list > state.txt
+          head -n 50 state.txt
+          grep -q "module.alb.aws_lb.this" state.txt
 
       - name: Terraform plan
         run: |
