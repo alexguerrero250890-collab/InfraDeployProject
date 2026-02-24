@@ -25,7 +25,7 @@ jobs:
     name: Terraform Apply (${{ inputs.environment }})
     runs-on: ubuntu-latest
 
-    # Esto activa GitHub Environments (y sus protection rules si aplican)
+    # Activa GitHub Environments (y sus protection rules si aplican)
     environment: ${{ inputs.environment }}
 
     steps:
@@ -42,20 +42,18 @@ jobs:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
 
-      # 🔎 Diagnóstico: confirma cuenta/identidad real
       - name: Who am I (AWS)
         run: |
           set -euo pipefail
           aws sts get-caller-identity
           aws configure list
 
-      # 🔎 Diagnóstico: confirma acceso a backend (S3 + DynamoDB)
       - name: Backend access check (S3 + DynamoDB)
         run: |
           set -euo pipefail
-          echo "Checking S3 state object:"
+          echo "Checking state object:"
           aws s3 ls "s3://${TF_STATE_BUCKET}/${{ inputs.environment }}/terraform.tfstate"
-          echo "Checking DynamoDB lock table:"
+          echo "Checking lock table:"
           aws dynamodb describe-table --table-name "${TF_LOCK_TABLE}" --region "${AWS_REGION}" >/dev/null
           echo "Backend access OK."
 
@@ -64,23 +62,13 @@ jobs:
           set -euo pipefail
           terraform -chdir=environments/${{ inputs.environment }} init -reconfigure
 
-      # (Opcional pero útil) ver el plan antes de aplicar
       - name: Terraform plan
         run: |
           set -euo pipefail
           terraform -chdir=environments/${{ inputs.environment }} plan -no-color
 
-      # ✅ Dev: auto-approve
-      - name: Terraform apply (dev auto-approve)
-        if: ${{ inputs.environment == 'dev' }}
+      - name: Terraform apply (auto-approve)
         run: |
           set -euo pipefail
           terraform -chdir=environments/${{ inputs.environment }} apply -auto-approve
-
-      # 🟠 Staging/Prod: apply manual (sin auto-approve)
-      - name: Terraform apply (staging/prod requires confirmation)
-        if: ${{ inputs.environment != 'dev' }}
-        run: |
-          set -euo pipefail
-          terraform -chdir=environments/${{ inputs.environment }} apply
 
