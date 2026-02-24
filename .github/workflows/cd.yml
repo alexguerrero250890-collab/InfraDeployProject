@@ -7,10 +7,7 @@ on:
         description: "Elige el environment"
         required: true
         type: choice
-        options:
-          - dev
-          - staging
-          - prod
+        options: [dev, staging, prod]
 
 permissions:
   contents: read
@@ -20,20 +17,23 @@ env:
   TF_STATE_BUCKET: terraform-state-infradeploy
   TF_LOCK_TABLE: terraform-locks
 
+concurrency:
+  group: infradeploy-cd-${{ inputs.environment }}
+  cancel-in-progress: false
+
 jobs:
   apply:
     name: Terraform Apply (${{ inputs.environment }})
     runs-on: ubuntu-latest
-
-    # Activa GitHub Environments (y sus protection rules si aplican)
     environment: ${{ inputs.environment }}
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Setup Terraform
+      - name: Setup Terraform (pin version)
         uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.13.5
 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
@@ -46,29 +46,55 @@ jobs:
         run: |
           set -euo pipefail
           aws sts get-caller-identity
-          aws configure list
 
       - name: Backend access check (S3 + DynamoDB)
         run: |
           set -euo pipefail
-          echo "Checking state object:"
           aws s3 ls "s3://${TF_STATE_BUCKET}/${{ inputs.environment }}/terraform.tfstate"
-          echo "Checking lock table:"
           aws dynamodb describe-table --table-name "${TF_LOCK_TABLE}" --region "${AWS_REGION}" >/dev/null
-          echo "Backend access OK."
 
       - name: Terraform init (reconfigure)
         run: |
           set -euo pipefail
           terraform -chdir=environments/${{ inputs.environment }} init -reconfigure
 
-      - name: Terraform plan
+      # 🔥 Imprime el backend REAL que Terraform está usando (clave para debug)
+      - name: Show backend config Terraform is using
         run: |
           set -euo pipefail
-          terraform -chdir=environments/${{ inputs.environment }} plan -no-color
+          echo "=== Backend (from .terraform/terraform.tfstate) ==="
+          cat environments/${{ inputs.environment }}/.terraform/terraform.tfstate | sed -n '1,120p'
 
-      - name: Terraform apply (auto-approve)
+      # 🔥 Estado: si no aparece un recurso “inconfundible”, cortamos
+      - name: Terraform state sanity check
         run: |
           set -euo pipefail
-          terraform -chdir=environments/${{ inputs.environment }} apply -auto-approve
+          echo "=== State list (first 80) ==="
+          terraform -chdir=environments/${{ inputs.environment }} state list | head -n 80
+
+          # Recurso inequívoco de tu stack (ALB listener https, por ejemplo)
+          terraform -chdir=environments/${{ inputs.environment }} state list | grep -q "module.alb.aws_lb_listener.https"
+
+          echo "State sanity check OK (found ALB https listener in state)."
+
+      - name: Terraform plan (save)
+        run: |
+          set -euo pipefail
+          terraform -chdir=environments/${{ inputs.environment }} plan -no-color -lock-timeout=10m -out=tfplan
+
+      # 🔥 Guardrail: si es staging/prod y el plan quiere crear recursos, fallamos.
+      - name: Guardrail (staging/prod must not create new infra)
+        if: ${{ inputs.environment != 'dev' }}
+        run: |
+          set -euo pipefail
+          terraform -chdir=environments/${{ inputs.environment }} show -no-color tfplan | tee plan.txt
+          if grep -qE '^Plan: [1-9][0-9]* to add' plan.txt; then
+            echo "ERROR: staging/prod plan wants to ADD resources. This indicates wrong state/backend. Aborting."
+            exit 1
+          fi
+
+      - name: Terraform apply
+        run: |
+          set -euo pipefail
+          terraform -chdir=environments/${{ inputs.environment }} apply -auto-approve -lock-timeout=10m tfplan
 
