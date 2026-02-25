@@ -18,7 +18,6 @@ permissions:
 env:
   AWS_REGION: eu-north-1
 
-# Evita ejecuciones simultáneas por environment
 concurrency:
   group: infradeploy-cd-${{ inputs.environment }}
   cancel-in-progress: false
@@ -27,8 +26,6 @@ jobs:
   apply:
     name: Terraform Apply (${{ inputs.environment }})
     runs-on: ubuntu-latest
-
-    # Activa GitHub Environments (approvals si están configurados)
     environment: ${{ inputs.environment }}
 
     steps:
@@ -57,17 +54,6 @@ jobs:
           set -euo pipefail
           terraform -chdir=environments/${{ inputs.environment }} init -reconfigure
 
-      # Selección automática del workspace correcto
-      - name: Select Terraform workspace
-        run: |
-          set -euo pipefail
-          terraform -chdir=environments/${{ inputs.environment }} workspace select ${{ inputs.environment }} \
-          || terraform -chdir=environments/${{ inputs.environment }} workspace new ${{ inputs.environment }}
-
-      - name: Show current workspace
-        run: terraform -chdir=environments/${{ inputs.environment }} workspace show
-
-      # Sanity check SIN head directo (evita EPIPE)
       - name: Terraform state sanity check
         run: |
           set -euo pipefail
