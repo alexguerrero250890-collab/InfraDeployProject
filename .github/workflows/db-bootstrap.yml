@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       environment:
-        description: "Target environment"
+        description: "Target environment (tag Environment on EC2)"
         required: true
         type: choice
         options:
@@ -12,145 +12,78 @@ on:
           - staging
           - prod
 
-permissions:
-  contents: read
-
 jobs:
   bootstrap:
     name: Bootstrap PostgreSQL
     runs-on: self-hosted
-    environment: ${{ inputs.environment }}
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
       # --------------------------------------------------
-      # Ensure required tools exist on self-hosted runner
-      # --------------------------------------------------
-      - name: Ensure tools (aws, session-manager-plugin, ansible, jq, nc)
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          command -v aws >/dev/null 2>&1 || { echo "aws cli not found"; exit 1; }
-
-          install_with_yum() { sudo yum -y install "$@" || true; }
-          install_with_apt() { sudo apt-get update -y && sudo apt-get install -y "$@" || true; }
-
-          if ! command -v session-manager-plugin >/dev/null 2>&1; then
-            echo "session-manager-plugin not found. Attempting install..."
-            if command -v yum >/dev/null 2>&1; then
-              install_with_yum session-manager-plugin
-            elif command -v apt-get >/dev/null 2>&1; then
-              install_with_apt session-manager-plugin
-            fi
-          fi
-
-          if ! command -v ansible-playbook >/dev/null 2>&1; then
-            echo "ansible not found. Attempting install..."
-            if command -v yum >/dev/null 2>&1; then
-              install_with_yum ansible
-            elif command -v apt-get >/dev/null 2>&1; then
-              install_with_apt ansible
-            fi
-          fi
-
-          if ! command -v jq >/dev/null 2>&1; then
-            echo "jq not found. Attempting install..."
-            if command -v yum >/dev/null 2>&1; then
-              install_with_yum jq
-            elif command -v apt-get >/dev/null 2>&1; then
-              install_with_apt jq
-            fi
-          fi
-
-          if ! command -v nc >/dev/null 2>&1; then
-            echo "nc not found. Attempting install..."
-            if command -v yum >/dev/null 2>&1; then
-              install_with_yum nc
-            elif command -v apt-get >/dev/null 2>&1; then
-              install_with_apt netcat-openbsd
-            fi
-          fi
-
-          command -v session-manager-plugin >/dev/null 2>&1 || { echo "session-manager-plugin is required"; exit 1; }
-          command -v ansible-playbook >/dev/null 2>&1 || { echo "ansible-playbook is required"; exit 1; }
-          command -v nc >/dev/null 2>&1 || { echo "nc is required"; exit 1; }
-
-      # --------------------------------------------------
-      # Resolve EC2 instance dynamically by Environment tag
+      # Resolve EC2 instance dynamically
       # --------------------------------------------------
       - name: Resolve EC2 instance
-        id: resolve
         shell: bash
         run: |
           set -euo pipefail
 
-          INSTANCE_ID="$(aws ec2 describe-instances \
+          INSTANCE_ID=$(aws ec2 describe-instances \
             --filters "Name=tag:Environment,Values=${{ inputs.environment }}" \
                       "Name=instance-state-name,Values=running" \
             --query "Reservations[].Instances[].InstanceId | [0]" \
-            --output text)"
+            --output text)
 
-          if [[ -z "${INSTANCE_ID}" || "${INSTANCE_ID}" == "None" ]]; then
-            echo "No running instance found for environment: ${{ inputs.environment }}"
+          if [[ -z "$INSTANCE_ID" || "$INSTANCE_ID" == "None" ]]; then
+            echo "No running instance found for environment"
             exit 1
           fi
 
-          echo "INSTANCE_ID=${INSTANCE_ID}" >> "$GITHUB_ENV"
-          echo "Using instance: ${INSTANCE_ID}"
+          echo "INSTANCE_ID=$INSTANCE_ID" >> $GITHUB_ENV
+          echo "Using instance: $INSTANCE_ID"
 
       # --------------------------------------------------
-      # Start SSM tunnel to RDS Proxy (local 65432 -> remote 5432)
+      # Start SSM tunnel
       # --------------------------------------------------
       - name: Start SSM tunnel
-        id: tunnel
         shell: bash
         env:
           PROXY_ENDPOINT: ${{ secrets.PROXY_ENDPOINT }}
         run: |
           set -euo pipefail
 
-          LOCAL_PORT="65432"
-          REMOTE_PORT="5432"
-
-          echo "PROXY_ENDPOINT length = ${#PROXY_ENDPOINT}"
-          [[ ${#PROXY_ENDPOINT} -gt 0 ]] || { echo "ERROR: PROXY_ENDPOINT is empty/missing"; exit 1; }
+          echo "PROXY_ENDPOINT length: ${#PROXY_ENDPOINT}"
+          [[ ${#PROXY_ENDPOINT} -gt 0 ]] || { echo "PROXY_ENDPOINT missing"; exit 1; }
 
           aws ssm start-session \
-            --target "${{ env.INSTANCE_ID }}" \
-            --document-name "AWS-StartPortForwardingSessionToRemoteHost" \
-            --parameters "host=${PROXY_ENDPOINT},portNumber=${REMOTE_PORT},localPortNumber=${LOCAL_PORT}" \
+            --target "$INSTANCE_ID" \
+            --document-name AWS-StartPortForwardingSessionToRemoteHost \
+            --parameters "host=${PROXY_ENDPOINT},portNumber=5432,localPortNumber=65432" \
             > ssm.log 2>&1 &
 
-          SSM_PID="$!"
-          echo "SSM_PID=${SSM_PID}" >> "$GITHUB_ENV"
-          echo "Started SSM tunnel PID=${SSM_PID}"
+          SSM_PID=$!
+          echo "SSM_PID=$SSM_PID" >> $GITHUB_ENV
+
+          echo "Waiting for tunnel..."
 
           for i in {1..30}; do
-            if nc -z 127.0.0.1 "${LOCAL_PORT}" >/dev/null 2>&1; then
-              echo "Tunnel is up on 127.0.0.1:${LOCAL_PORT}"
-              exit 0
-            fi
+            nc -z 127.0.0.1 65432 && break
             sleep 1
           done
 
-          echo "Tunnel did not come up in time. ssm.log:"
-          tail -n 200 ssm.log || true
-          exit 1
+          nc -z 127.0.0.1 65432 || { echo "Tunnel failed"; tail -n 50 ssm.log; exit 1; }
+
+          echo "Tunnel established."
 
       # --------------------------------------------------
       # Install Ansible collection
       # --------------------------------------------------
       - name: Install PostgreSQL collection
-        shell: bash
-        run: |
-          set -euo pipefail
-          ansible-galaxy collection install community.postgresql
+        run: ansible-galaxy collection install community.postgresql
 
       # --------------------------------------------------
-      # Run playbook (FORCED absolute path + debug)
+      # Run Playbook
       # --------------------------------------------------
       - name: Run PostgreSQL bootstrap
         shell: bash
@@ -162,27 +95,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          echo "PWD=$(pwd)"
-          echo "GITHUB_WORKSPACE=${GITHUB_WORKSPACE}"
-
-          echo "Listing ansible/playbooks:"
-          ls -la ansible/playbooks || true
-
-          echo "Searching for *bootstrap*.yml files:"
-          find ansible/playbooks -maxdepth 1 -type f -name "*bootstrap*.yml" -print -exec head -n 3 {} \; || true
-
-          PLAYBOOK="${GITHUB_WORKSPACE}/ansible/playbooks/postgres_bootstrap.yml"
-          echo "Using playbook: $PLAYBOOK"
-
-          if [[ ! -f "$PLAYBOOK" ]]; then
-            echo "ERROR: Expected playbook not found at $PLAYBOOK"
-            exit 1
-          fi
-
-          echo "--- head of postgres_bootstrap.yml ---"
-          head -n 10 "$PLAYBOOK"
-
-          ansible-playbook "$PLAYBOOK" \
+          ansible-playbook ansible/playbooks/postgres_bootstrap.yml \
             -e "db_host=127.0.0.1" \
             -e "db_port=65432" \
             -e "db_name=${DB_NAME}" \
@@ -196,12 +109,5 @@ jobs:
       # --------------------------------------------------
       - name: Stop SSM tunnel
         if: always()
-        shell: bash
         run: |
-          set -euo pipefail
-          if [[ -n "${SSM_PID:-}" ]]; then
-            echo "Stopping SSM tunnel PID=${SSM_PID}"
-            kill "${SSM_PID}" >/dev/null 2>&1 || true
-          else
-            echo "SSM_PID not set; nothing to stop"
-          fi
+          kill $SSM_PID || true
