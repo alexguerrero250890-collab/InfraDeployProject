@@ -28,20 +28,16 @@ jobs:
       # --------------------------------------------------
       # Ensure required tools exist on self-hosted runner
       # --------------------------------------------------
-      - name: Ensure tools (aws, ssm-plugin, ansible, psql, nc)
+      - name: Ensure tools (aws, session-manager-plugin, ansible, jq, nc)
         shell: bash
         run: |
           set -euo pipefail
 
           command -v aws >/dev/null 2>&1 || { echo "aws cli not found"; exit 1; }
 
-          # Try to install missing tools depending on distro (best-effort).
-          install_with_yum() {
-            sudo yum -y install "$@" || true
-          }
-          install_with_apt() {
-            sudo apt-get update -y && sudo apt-get install -y "$@" || true
-          }
+          # Best-effort installs (do not fail the job if install isn't possible)
+          install_with_yum() { sudo yum -y install "$@" || true; }
+          install_with_apt() { sudo apt-get update -y && sudo apt-get install -y "$@" || true; }
 
           if ! command -v session-manager-plugin >/dev/null 2>&1; then
             echo "session-manager-plugin not found. Attempting install..."
@@ -61,12 +57,12 @@ jobs:
             fi
           fi
 
-          if ! command -v psql >/dev/null 2>&1; then
-            echo "psql not found. Attempting install..."
+          if ! command -v jq >/dev/null 2>&1; then
+            echo "jq not found. Attempting install..."
             if command -v yum >/dev/null 2>&1; then
-              install_with_yum postgresql
+              install_with_yum jq
             elif command -v apt-get >/dev/null 2>&1; then
-              install_with_apt postgresql-client
+              install_with_apt jq
             fi
           fi
 
@@ -79,9 +75,9 @@ jobs:
             fi
           fi
 
-          # Quick sanity check
-          command -v session-manager-plugin >/dev/null 2>&1 || echo "WARN: session-manager-plugin still not found (SSM tunnel may fail)"
-          command -v ansible-galaxy >/dev/null 2>&1 || echo "WARN: ansible-galaxy not found (collection install may fail)"
+          # Final checks (fail if critical ones still missing)
+          command -v session-manager-plugin >/dev/null 2>&1 || { echo "session-manager-plugin is required"; exit 1; }
+          command -v ansible-playbook >/dev/null 2>&1 || { echo "ansible-playbook is required"; exit 1; }
 
       # --------------------------------------------------
       # Resolve EC2 instance dynamically by Environment tag
@@ -110,42 +106,46 @@ jobs:
       # Start SSM tunnel to RDS Proxy (local 65432 -> remote 5432)
       # --------------------------------------------------
       - name: Start SSM tunnel
+        id: tunnel
         shell: bash
         run: |
           set -euo pipefail
 
+          LOCAL_PORT="65432"
+          REMOTE_PORT="5432"
+
           # Start port-forward session in background
           aws ssm start-session \
-            --target "${INSTANCE_ID}" \
+            --target "${{ env.INSTANCE_ID }}" \
             --document-name "AWS-StartPortForwardingSessionToRemoteHost" \
-            --parameters '{"host":["${{ secrets.DB_HOST }}"],"portNumber":["5432"],"localPortNumber":["65432"]}' \
+            --parameters "host=${{ secrets.DB_HOST }},portNumber=${REMOTE_PORT},localPortNumber=${LOCAL_PORT}" \
             > ssm.log 2>&1 &
 
-          echo "SSM_PID=$!" >> "$GITHUB_ENV"
-          echo "SSM session started with PID $!"
+          SSM_PID="$!"
+          echo "SSM_PID=${SSM_PID}" >> "$GITHUB_ENV"
+          echo "Started SSM tunnel PID=${SSM_PID}"
 
-          # Wait for local port to be ready (up to 60s)
-          echo "Waiting for tunnel on 127.0.0.1:65432 ..."
-          for i in $(seq 1 60); do
-            if nc -z 127.0.0.1 65432 >/dev/null 2>&1; then
-              echo "Tunnel is up."
+          # Wait until local port is listening
+          for i in {1..30}; do
+            if nc -z 127.0.0.1 "${LOCAL_PORT}" >/dev/null 2>&1; then
+              echo "Tunnel is up on 127.0.0.1:${LOCAL_PORT}"
               exit 0
             fi
             sleep 1
           done
 
-          echo "Tunnel did not come up in time. Dumping last logs:"
-          tail -n 100 ssm.log || true
+          echo "Tunnel did not come up in time. ssm.log:"
+          tail -n 200 ssm.log || true
           exit 1
 
       # --------------------------------------------------
-      # Install Ansible collection (idempotent)
+      # Install Ansible collection (safe to repeat)
       # --------------------------------------------------
       - name: Install PostgreSQL collection
         shell: bash
         run: |
           set -euo pipefail
-          ansible-galaxy collection install community.postgresql --force
+          ansible-galaxy collection install community.postgresql
 
       # --------------------------------------------------
       # Execute Playbook
@@ -160,9 +160,6 @@ jobs:
         run: |
           set -euo pipefail
 
-          # Build roles JSON safely
-          PG_ROLES_JSON='[{"name":"app_user","password":"'"${APP_USER_PASSWORD//\"/\\\"}"'","flags":"LOGIN"}]'
-
           ansible-playbook ansible/playbooks/postgres_bootstrap.yml \
             -e "db_host=127.0.0.1" \
             -e "db_port=65432" \
@@ -170,20 +167,19 @@ jobs:
             -e "db_admin_user=${DB_ADMIN_USER}" \
             -e "db_admin_password=${DB_ADMIN_PASSWORD}" \
             -e "enable_roles=true" \
-            -e "pg_roles=${PG_ROLES_JSON}"
+            -e "pg_roles=[{'name':'app_user','password':'${APP_USER_PASSWORD}','flags':'LOGIN'}]"
 
       # --------------------------------------------------
       # Cleanup
       # --------------------------------------------------
-      - name: Kill SSM tunnel
+      - name: Stop SSM tunnel
         if: always()
         shell: bash
         run: |
-          set +e
+          set -euo pipefail
           if [[ -n "${SSM_PID:-}" ]]; then
-            echo "Killing SSM session PID ${SSM_PID}"
-            kill "${SSM_PID}" 2>/dev/null || true
+            echo "Stopping SSM tunnel PID=${SSM_PID}"
+            kill "${SSM_PID}" >/dev/null 2>&1 || true
           else
-            echo "SSM_PID not set; attempting best-effort cleanup"
-            pkill -f "aws ssm start-session" || true
+            echo "SSM_PID not set; nothing to stop"
           fi
