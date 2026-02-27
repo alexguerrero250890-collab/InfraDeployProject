@@ -35,7 +35,7 @@ jobs:
 
           command -v aws >/dev/null 2>&1 || { echo "aws cli not found"; exit 1; }
 
-          # Best-effort installs (do not fail the job if install isn't possible)
+          # Best-effort installs
           install_with_yum() { sudo yum -y install "$@" || true; }
           install_with_apt() { sudo apt-get update -y && sudo apt-get install -y "$@" || true; }
 
@@ -75,7 +75,7 @@ jobs:
             fi
           fi
 
-          # Final checks (fail if critical ones still missing)
+          # Final checks
           command -v session-manager-plugin >/dev/null 2>&1 || { echo "session-manager-plugin is required"; exit 1; }
           command -v ansible-playbook >/dev/null 2>&1 || { echo "ansible-playbook is required"; exit 1; }
           command -v nc >/dev/null 2>&1 || { echo "nc is required"; exit 1; }
@@ -115,13 +115,11 @@ jobs:
           LOCAL_PORT="65432"
           REMOTE_PORT="5432"
 
-          # Guard: ensure PROXY_ENDPOINT secret is present
           if [[ -z "${{ secrets.PROXY_ENDPOINT }}" ]]; then
             echo "ERROR: PROXY_ENDPOINT secret is empty/missing for environment '${{ inputs.environment }}'"
             exit 1
           fi
 
-          # Start port-forward session in background
           aws ssm start-session \
             --target "${{ env.INSTANCE_ID }}" \
             --document-name "AWS-StartPortForwardingSessionToRemoteHost" \
@@ -132,7 +130,6 @@ jobs:
           echo "SSM_PID=${SSM_PID}" >> "$GITHUB_ENV"
           echo "Started SSM tunnel PID=${SSM_PID}"
 
-          # Wait until local port is listening
           for i in {1..30}; do
             if nc -z 127.0.0.1 "${LOCAL_PORT}" >/dev/null 2>&1; then
               echo "Tunnel is up on 127.0.0.1:${LOCAL_PORT}"
@@ -146,7 +143,7 @@ jobs:
           exit 1
 
       # --------------------------------------------------
-      # Install Ansible collection (safe to repeat)
+      # Install Ansible collection
       # --------------------------------------------------
       - name: Install PostgreSQL collection
         shell: bash
@@ -155,7 +152,19 @@ jobs:
           ansible-galaxy collection install community.postgresql
 
       # --------------------------------------------------
-      # Execute Playbook
+      # Verify we are using the correct playbook (debug)
+      # --------------------------------------------------
+      - name: Verify playbook exists
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "PWD=$(pwd)"
+          ls -la ansible/playbooks
+          echo "--- head of postgres_bootstrap.yml ---"
+          head -n 10 ansible/playbooks/postgres_bootstrap.yml
+
+      # --------------------------------------------------
+      # Execute Playbook (THIS MUST POINT TO postgres_bootstrap.yml)
       # --------------------------------------------------
       - name: Run PostgreSQL bootstrap
         shell: bash
