@@ -1,83 +1,122 @@
-name: DB Bootstrap
+- name: Bootstrap PostgreSQL (database/extensions/schemas/privileges)
+  hosts: localhost
+  connection: local
+  gather_facts: false
 
-on:
-  workflow_dispatch:
-    inputs:
-      environment:
-        description: "Target environment"
-        required: true
-        type: choice
-        options:
-          - dev
-          - staging
-          - prod
+  vars:
+    db_port: "{{ db_port | default(5432) }}"
+    db_default_db: "postgres"
+    db_ssl_mode: "{{ db_ssl_mode | default('require') }}"
 
-jobs:
-  bootstrap:
-    runs-on: self-hosted
-    environment: ${{ inputs.environment }}
+  pre_tasks:
+    - name: Assert required connection vars exist
+      ansible.builtin.assert:
+        that:
+          - db_host is defined
+          - db_admin_user is defined
+          - db_admin_password is defined
+          - db_name is defined
+        fail_msg: >
+          Missing required variables. Define db_host, db_admin_user,
+          db_admin_password and db_name.
 
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+    - name: Ensure psycopg2 is present
+      ansible.builtin.pip:
+        name: psycopg2-binary
+        state: present
 
-      # --------------------------------------------
-      # Resolve EC2 instance dynamically
-      # --------------------------------------------
-      - name: Resolve EC2 instance by Environment tag
-        id: resolve
-        run: |
-          INSTANCE_ID=$(aws ec2 describe-instances \
-            --filters "Name=tag:Environment,Values=${{ inputs.environment }}" \
-                      "Name=instance-state-name,Values=running" \
-            --query "Reservations[].Instances[].InstanceId | [0]" \
-            --output text)
+    - name: Connectivity check (SELECT 1)
+      community.postgresql.postgresql_query:
+        login_host: "{{ db_host }}"
+        login_user: "{{ db_admin_user }}"
+        login_password: "{{ db_admin_password }}"
+        port: "{{ db_port }}"
+        ssl_mode: "{{ db_ssl_mode }}"
+        db: "{{ db_default_db }}"
+        query: "SELECT 1;"
+      register: connectivity_check
 
-          if [ "$INSTANCE_ID" == "None" ] || [ -z "$INSTANCE_ID" ]; then
-            echo "No running instance found for environment"
-            exit 1
-          fi
+    - name: Show connectivity result
+      ansible.builtin.debug:
+        msg: "DB connectivity OK"
 
-          echo "INSTANCE_ID=$INSTANCE_ID" >> $GITHUB_ENV
-          echo "Using instance: $INSTANCE_ID"
+  tasks:
+    - name: Create roles/users (optional)
+      community.postgresql.postgresql_user:
+        login_host: "{{ db_host }}"
+        login_user: "{{ db_admin_user }}"
+        login_password: "{{ db_admin_password }}"
+        port: "{{ db_port }}"
+        ssl_mode: "{{ db_ssl_mode }}"
+        db: "{{ db_default_db }}"
+        name: "{{ item.name }}"
+        password: "{{ item.password | default(omit) }}"
+        role_attr_flags: "{{ item.flags | default(omit) }}"
+        state: present
+      loop: "{{ pg_roles | default([]) }}"
+      no_log: true
+      when:
+        - enable_roles | default(false) | bool
+        - pg_roles is defined
+        - pg_roles | length > 0
 
-      # --------------------------------------------
-      # Start SSM Tunnel to RDS Proxy
-      # --------------------------------------------
-      - name: Start SSM tunnel
-        run: |
-          aws ssm start-session \
-            --target $INSTANCE_ID \
-            --document-name AWS-StartPortForwardingSessionToRemoteHost \
-            --parameters "host=${{ secrets.DB_HOST }},portNumber=5432,localPortNumber=65432" \
-            > ssm.log 2>&1 &
+    - name: Create database
+      community.postgresql.postgresql_db:
+        login_host: "{{ db_host }}"
+        login_user: "{{ db_admin_user }}"
+        login_password: "{{ db_admin_password }}"
+        port: "{{ db_port }}"
+        ssl_mode: "{{ db_ssl_mode }}"
+        name: "{{ db_name }}"
+        owner: "{{ db_owner | default(db_admin_user) }}"
+        state: present
 
-          sleep 10
+    - name: Ensure extensions installed
+      community.postgresql.postgresql_ext:
+        login_host: "{{ db_host }}"
+        login_user: "{{ db_admin_user }}"
+        login_password: "{{ db_admin_password }}"
+        port: "{{ db_port }}"
+        ssl_mode: "{{ db_ssl_mode }}"
+        db: "{{ db_name }}"
+        name: "{{ item }}"
+        state: present
+      loop: "{{ pg_extensions | default([]) }}"
+      when:
+        - pg_extensions is defined
+        - pg_extensions | length > 0
 
-      # --------------------------------------------
-      # Execute Ansible Playbook
-      # --------------------------------------------
-      - name: Run PostgreSQL bootstrap
-        env:
-          DB_ADMIN_USER: ${{ secrets.DB_ADMIN_USER }}
-          DB_ADMIN_PASSWORD: ${{ secrets.DB_ADMIN_PASSWORD }}
-          DB_NAME: ${{ secrets.DB_NAME }}
-          APP_USER_PASSWORD: ${{ secrets.APP_USER_PASSWORD }}
-        run: |
-          ansible-playbook ansible/playbooks/postgres_bootstrap.yml \
-            -e "db_host=127.0.0.1" \
-            -e "db_port=65432" \
-            -e "db_name=${DB_NAME}" \
-            -e "db_admin_user=${DB_ADMIN_USER}" \
-            -e "db_admin_password=${DB_ADMIN_PASSWORD}" \
-            -e "enable_roles=true" \
-            -e "pg_roles=[{'name':'app_user','password':'${APP_USER_PASSWORD}','flags':'LOGIN'}]" \
-            -e "pg_extensions=['uuid-ossp']"
+    - name: Create schemas
+      community.postgresql.postgresql_schema:
+        login_host: "{{ db_host }}"
+        login_user: "{{ db_admin_user }}"
+        login_password: "{{ db_admin_password }}"
+        port: "{{ db_port }}"
+        ssl_mode: "{{ db_ssl_mode }}"
+        db: "{{ db_name }}"
+        name: "{{ item.name }}"
+        owner: "{{ item.owner | default(db_admin_user) }}"
+        state: present
+      loop: "{{ pg_schemas | default([]) }}"
+      when:
+        - pg_schemas is defined
+        - pg_schemas | length > 0
 
-      # --------------------------------------------
-      # Cleanup
-      # --------------------------------------------
-      - name: Kill SSM tunnel
-        if: always()
-        run: |
-          pkill -f "start-session" || true
+    - name: Grant privileges (optional)
+      community.postgresql.postgresql_privs:
+        login_host: "{{ db_host }}"
+        login_user: "{{ db_admin_user }}"
+        login_password: "{{ db_admin_password }}"
+        port: "{{ db_port }}"
+        ssl_mode: "{{ db_ssl_mode }}"
+        db: "{{ db_name }}"
+        type: "{{ item.type }}"
+        privs: "{{ item.privs }}"
+        objs: "{{ item.objs }}"
+        roles: "{{ item.roles }}"
+        schema: "{{ item.schema | default(omit) }}"
+        state: present
+      loop: "{{ pg_privs | default([]) }}"
+      when:
+        - pg_privs is defined
+        - pg_privs | length > 0
