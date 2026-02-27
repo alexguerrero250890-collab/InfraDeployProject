@@ -12,6 +12,9 @@ on:
           - staging
           - prod
 
+permissions:
+  contents: read
+
 jobs:
   bootstrap:
     name: Bootstrap PostgreSQL
@@ -23,55 +26,143 @@ jobs:
         uses: actions/checkout@v4
 
       # --------------------------------------------------
+      # Ensure required tools exist on self-hosted runner
+      # --------------------------------------------------
+      - name: Ensure tools (aws, ssm-plugin, ansible, psql, nc)
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          command -v aws >/dev/null 2>&1 || { echo "aws cli not found"; exit 1; }
+
+          # Try to install missing tools depending on distro (best-effort).
+          install_with_yum() {
+            sudo yum -y install "$@" || true
+          }
+          install_with_apt() {
+            sudo apt-get update -y && sudo apt-get install -y "$@" || true
+          }
+
+          if ! command -v session-manager-plugin >/dev/null 2>&1; then
+            echo "session-manager-plugin not found. Attempting install..."
+            if command -v yum >/dev/null 2>&1; then
+              install_with_yum session-manager-plugin
+            elif command -v apt-get >/dev/null 2>&1; then
+              install_with_apt session-manager-plugin
+            fi
+          fi
+
+          if ! command -v ansible-playbook >/dev/null 2>&1; then
+            echo "ansible not found. Attempting install..."
+            if command -v yum >/dev/null 2>&1; then
+              install_with_yum ansible
+            elif command -v apt-get >/dev/null 2>&1; then
+              install_with_apt ansible
+            fi
+          fi
+
+          if ! command -v psql >/dev/null 2>&1; then
+            echo "psql not found. Attempting install..."
+            if command -v yum >/dev/null 2>&1; then
+              install_with_yum postgresql
+            elif command -v apt-get >/dev/null 2>&1; then
+              install_with_apt postgresql-client
+            fi
+          fi
+
+          if ! command -v nc >/dev/null 2>&1; then
+            echo "nc not found. Attempting install..."
+            if command -v yum >/dev/null 2>&1; then
+              install_with_yum nc
+            elif command -v apt-get >/dev/null 2>&1; then
+              install_with_apt netcat-openbsd
+            fi
+          fi
+
+          # Quick sanity check
+          command -v session-manager-plugin >/dev/null 2>&1 || echo "WARN: session-manager-plugin still not found (SSM tunnel may fail)"
+          command -v ansible-galaxy >/dev/null 2>&1 || echo "WARN: ansible-galaxy not found (collection install may fail)"
+
+      # --------------------------------------------------
       # Resolve EC2 instance dynamically by Environment tag
       # --------------------------------------------------
       - name: Resolve EC2 instance
         id: resolve
+        shell: bash
         run: |
-          INSTANCE_ID=$(aws ec2 describe-instances \
+          set -euo pipefail
+
+          INSTANCE_ID="$(aws ec2 describe-instances \
             --filters "Name=tag:Environment,Values=${{ inputs.environment }}" \
                       "Name=instance-state-name,Values=running" \
             --query "Reservations[].Instances[].InstanceId | [0]" \
-            --output text)
+            --output text)"
 
-          if [ -z "$INSTANCE_ID" ] || [ "$INSTANCE_ID" == "None" ]; then
+          if [[ -z "${INSTANCE_ID}" || "${INSTANCE_ID}" == "None" ]]; then
             echo "No running instance found for environment: ${{ inputs.environment }}"
             exit 1
           fi
 
-          echo "INSTANCE_ID=$INSTANCE_ID" >> $GITHUB_ENV
-          echo "Using instance: $INSTANCE_ID"
+          echo "INSTANCE_ID=${INSTANCE_ID}" >> "$GITHUB_ENV"
+          echo "Using instance: ${INSTANCE_ID}"
 
       # --------------------------------------------------
-      # Start SSM tunnel to RDS Proxy
+      # Start SSM tunnel to RDS Proxy (local 65432 -> remote 5432)
       # --------------------------------------------------
       - name: Start SSM tunnel
+        shell: bash
         run: |
+          set -euo pipefail
+
+          # Start port-forward session in background
           aws ssm start-session \
-            --target $INSTANCE_ID \
-            --document-name AWS-StartPortForwardingSessionToRemoteHost \
-            --parameters "host=${{ secrets.DB_HOST }},portNumber=5432,localPortNumber=65432" \
+            --target "${INSTANCE_ID}" \
+            --document-name "AWS-StartPortForwardingSessionToRemoteHost" \
+            --parameters '{"host":["${{ secrets.DB_HOST }}"],"portNumber":["5432"],"localPortNumber":["65432"]}' \
             > ssm.log 2>&1 &
 
-          echo "Waiting for tunnel..."
-          sleep 10
+          echo "SSM_PID=$!" >> "$GITHUB_ENV"
+          echo "SSM session started with PID $!"
+
+          # Wait for local port to be ready (up to 60s)
+          echo "Waiting for tunnel on 127.0.0.1:65432 ..."
+          for i in $(seq 1 60); do
+            if nc -z 127.0.0.1 65432 >/dev/null 2>&1; then
+              echo "Tunnel is up."
+              exit 0
+            fi
+            sleep 1
+          done
+
+          echo "Tunnel did not come up in time. Dumping last logs:"
+          tail -n 100 ssm.log || true
+          exit 1
 
       # --------------------------------------------------
-      # Install Ansible collection
+      # Install Ansible collection (idempotent)
       # --------------------------------------------------
       - name: Install PostgreSQL collection
-        run: ansible-galaxy collection install community.postgresql
+        shell: bash
+        run: |
+          set -euo pipefail
+          ansible-galaxy collection install community.postgresql --force
 
       # --------------------------------------------------
       # Execute Playbook
       # --------------------------------------------------
       - name: Run PostgreSQL bootstrap
+        shell: bash
         env:
           DB_ADMIN_USER: ${{ secrets.DB_ADMIN_USER }}
           DB_ADMIN_PASSWORD: ${{ secrets.DB_ADMIN_PASSWORD }}
           DB_NAME: ${{ secrets.DB_NAME }}
           APP_USER_PASSWORD: ${{ secrets.APP_USER_PASSWORD }}
         run: |
+          set -euo pipefail
+
+          # Build roles JSON safely
+          PG_ROLES_JSON='[{"name":"app_user","password":"'"${APP_USER_PASSWORD//\"/\\\"}"'","flags":"LOGIN"}]'
+
           ansible-playbook ansible/playbooks/postgres_bootstrap.yml \
             -e "db_host=127.0.0.1" \
             -e "db_port=65432" \
@@ -79,12 +170,20 @@ jobs:
             -e "db_admin_user=${DB_ADMIN_USER}" \
             -e "db_admin_password=${DB_ADMIN_PASSWORD}" \
             -e "enable_roles=true" \
-            -e "pg_roles=[{'name':'app_user','password':'${APP_USER_PASSWORD}','flags':'LOGIN'}]"
+            -e "pg_roles=${PG_ROLES_JSON}"
 
       # --------------------------------------------------
       # Cleanup
       # --------------------------------------------------
       - name: Kill SSM tunnel
         if: always()
+        shell: bash
         run: |
-          pkill -f "start-session" || true
+          set +e
+          if [[ -n "${SSM_PID:-}" ]]; then
+            echo "Killing SSM session PID ${SSM_PID}"
+            kill "${SSM_PID}" 2>/dev/null || true
+          else
+            echo "SSM_PID not set; attempting best-effort cleanup"
+            pkill -f "aws ssm start-session" || true
+          fi
