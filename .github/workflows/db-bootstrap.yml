@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       environment:
-        description: "Target environment (tag Environment on EC2)"
+        description: "Target environment (and GitHub Environment secrets scope)"
         required: true
         type: choice
         options:
@@ -12,10 +12,14 @@ on:
           - staging
           - prod
 
+permissions:
+  contents: read
+
 jobs:
   bootstrap:
     name: Bootstrap PostgreSQL
     runs-on: self-hosted
+    environment: ${{ inputs.environment }}
 
     steps:
       - name: Checkout repository
@@ -36,15 +40,15 @@ jobs:
             --output text)
 
           if [[ -z "$INSTANCE_ID" || "$INSTANCE_ID" == "None" ]]; then
-            echo "No running instance found for environment"
+            echo "No running instance found for environment: ${{ inputs.environment }}"
             exit 1
           fi
 
-          echo "INSTANCE_ID=$INSTANCE_ID" >> $GITHUB_ENV
+          echo "INSTANCE_ID=$INSTANCE_ID" >> "$GITHUB_ENV"
           echo "Using instance: $INSTANCE_ID"
 
       # --------------------------------------------------
-      # Start SSM tunnel
+      # Start SSM tunnel (PROXY_ENDPOINT from Environment secrets)
       # --------------------------------------------------
       - name: Start SSM tunnel
         shell: bash
@@ -54,7 +58,7 @@ jobs:
           set -euo pipefail
 
           echo "PROXY_ENDPOINT length: ${#PROXY_ENDPOINT}"
-          [[ ${#PROXY_ENDPOINT} -gt 0 ]] || { echo "PROXY_ENDPOINT missing"; exit 1; }
+          [[ ${#PROXY_ENDPOINT} -gt 0 ]] || { echo "PROXY_ENDPOINT missing (Environment secret)"; exit 1; }
 
           aws ssm start-session \
             --target "$INSTANCE_ID" \
@@ -63,24 +67,26 @@ jobs:
             > ssm.log 2>&1 &
 
           SSM_PID=$!
-          echo "SSM_PID=$SSM_PID" >> $GITHUB_ENV
+          echo "SSM_PID=$SSM_PID" >> "$GITHUB_ENV"
+          echo "Started SSM tunnel PID=$SSM_PID"
 
           echo "Waiting for tunnel..."
-
           for i in {1..30}; do
             nc -z 127.0.0.1 65432 && break
             sleep 1
           done
 
-          nc -z 127.0.0.1 65432 || { echo "Tunnel failed"; tail -n 50 ssm.log; exit 1; }
-
+          nc -z 127.0.0.1 65432 || { echo "Tunnel failed"; tail -n 80 ssm.log; exit 1; }
           echo "Tunnel established."
 
       # --------------------------------------------------
       # Install Ansible collection
       # --------------------------------------------------
       - name: Install PostgreSQL collection
-        run: ansible-galaxy collection install community.postgresql
+        shell: bash
+        run: |
+          set -euo pipefail
+          ansible-galaxy collection install community.postgresql
 
       # --------------------------------------------------
       # Run Playbook
@@ -95,7 +101,12 @@ jobs:
         run: |
           set -euo pipefail
 
-          ansible-playbook ansible/playbooks/postgres_bootstrap.yml \
+          PLAYBOOK="${GITHUB_WORKSPACE}/ansible/playbooks/postgres_bootstrap.yml"
+          echo "Using playbook: $PLAYBOOK"
+          test -f "$PLAYBOOK" || { echo "Playbook not found"; exit 1; }
+          head -n 5 "$PLAYBOOK"
+
+          ansible-playbook "$PLAYBOOK" \
             -e "db_host=127.0.0.1" \
             -e "db_port=65432" \
             -e "db_name=${DB_NAME}" \
@@ -109,5 +120,12 @@ jobs:
       # --------------------------------------------------
       - name: Stop SSM tunnel
         if: always()
+        shell: bash
         run: |
-          kill $SSM_PID || true
+          set -euo pipefail
+          if [[ -n "${SSM_PID:-}" ]]; then
+            echo "Stopping SSM tunnel PID=${SSM_PID}"
+            kill "${SSM_PID}" >/dev/null 2>&1 || true
+          else
+            echo "SSM_PID not set; nothing to stop"
+          fi
