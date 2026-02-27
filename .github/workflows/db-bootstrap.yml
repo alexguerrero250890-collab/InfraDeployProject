@@ -107,21 +107,21 @@ jobs:
       - name: Start SSM tunnel
         id: tunnel
         shell: bash
+        env:
+          PROXY_ENDPOINT: ${{ secrets.PROXY_ENDPOINT }}
         run: |
           set -euo pipefail
 
           LOCAL_PORT="65432"
           REMOTE_PORT="5432"
 
-          if [[ -z "${{ secrets.PROXY_ENDPOINT }}" ]]; then
-            echo "ERROR: PROXY_ENDPOINT secret is empty/missing for environment '${{ inputs.environment }}'"
-            exit 1
-          fi
+          echo "PROXY_ENDPOINT length = ${#PROXY_ENDPOINT}"
+          [[ ${#PROXY_ENDPOINT} -gt 0 ]] || { echo "ERROR: PROXY_ENDPOINT is empty/missing"; exit 1; }
 
           aws ssm start-session \
             --target "${{ env.INSTANCE_ID }}" \
             --document-name "AWS-StartPortForwardingSessionToRemoteHost" \
-            --parameters "host=${{ secrets.PROXY_ENDPOINT }},portNumber=${REMOTE_PORT},localPortNumber=${LOCAL_PORT}" \
+            --parameters "host=${PROXY_ENDPOINT},portNumber=${REMOTE_PORT},localPortNumber=${LOCAL_PORT}" \
             > ssm.log 2>&1 &
 
           SSM_PID="$!"
@@ -168,7 +168,7 @@ jobs:
           echo "Listing ansible/playbooks:"
           ls -la ansible/playbooks || true
 
-          echo "Searching for *bootstrap*.yml files (to detect any wrong file like ***_bootstrap.yml):"
+          echo "Searching for *bootstrap*.yml files:"
           find ansible/playbooks -maxdepth 1 -type f -name "*bootstrap*.yml" -print -exec head -n 3 {} \; || true
 
           PLAYBOOK="${GITHUB_WORKSPACE}/ansible/playbooks/postgres_bootstrap.yml"
