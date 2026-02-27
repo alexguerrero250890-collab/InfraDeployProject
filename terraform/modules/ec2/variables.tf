@@ -11,3 +11,8 @@ variable "alb_sg_id" {
   default = null
 }
 
+variable "environment" {
+  type        = string
+  description = "Environment name (dev, staging, prod)"
+}
+

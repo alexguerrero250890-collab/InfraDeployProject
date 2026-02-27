@@ -18,3 +18,13 @@ output "rds_proxy_secret_arn" {
   value       = aws_secretsmanager_secret.rds_proxy.arn
 }
 
+output "rds_proxy_name" {
+  description = "Nombre del RDS Proxy"
+  value       = aws_db_proxy.this.name
+}
+
+output "rds_proxy_endpoint" {
+  description = "Endpoint del RDS Proxy"
+  value       = aws_db_proxy.this.endpoint
+}
+

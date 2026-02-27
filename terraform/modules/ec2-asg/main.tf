@@ -1,11 +1,7 @@
-# =========================
-# Security Group ASG
-# =========================
 resource "aws_security_group" "this" {
-  name   = "${var.project_name}-asg-sg"
+  name   = "${var.project_name}-${var.environment}-asg-sg"
   vpc_id = var.vpc_id
 
-  # Solo tráfico HTTP desde el ALB
   ingress {
     from_port       = 80
     to_port         = 80
@@ -13,7 +9,6 @@ resource "aws_security_group" "this" {
     security_groups = [var.alb_sg_id]
   }
 
-  # Egress libre (necesario para SSM, yum/dnf, etc.)
   egress {
     from_port   = 0
     to_port     = 0
@@ -22,51 +17,31 @@ resource "aws_security_group" "this" {
   }
 
   tags = {
-    Name = "${var.project_name}-asg-sg"
+    Name        = "${var.project_name}-${var.environment}-asg-sg"
+    Environment = var.environment
   }
 }
 
-# =========================
-# IAM Role para EC2 (SSM)
-# =========================
 resource "aws_iam_role" "ec2_ssm_role" {
-  name = "${var.project_name}-ec2-ssm-role"
+  name = "${var.project_name}-${var.environment}-ec2-ssm-role"
 
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
-    Statement = [
-      {
-        Effect = "Allow"
-        Principal = {
-          Service = "ec2.amazonaws.com"
-        }
-        Action = "sts:AssumeRole"
-      }
-    ]
+    Statement = [{
+      Effect    = "Allow"
+      Principal = { Service = "ec2.amazonaws.com" }
+      Action    = "sts:AssumeRole"
+    }]
   })
 }
 
-# =========================
-# Attach AmazonSSMManagedInstanceCore
-# =========================
-resource "aws_iam_role_policy_attachment" "ssm_core" {
-  role       = aws_iam_role.ec2_ssm_role.name
-  policy_arn = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
-}
-
-# =========================
-# Instance Profile
-# =========================
 resource "aws_iam_instance_profile" "this" {
-  name = "${var.project_name}-ec2-instance-profile"
+  name = "${var.project_name}-${var.environment}-ec2-instance-profile"
   role = aws_iam_role.ec2_ssm_role.name
 }
 
-# =========================
-# Launch Template
-# =========================
 resource "aws_launch_template" "this" {
-  name_prefix   = "${var.project_name}-lt-"
+  name_prefix   = "${var.project_name}-${var.environment}-lt-"
   image_id      = var.ami_id
   instance_type = var.instance_type
 
@@ -76,49 +51,43 @@ resource "aws_launch_template" "this" {
 
   vpc_security_group_ids = [aws_security_group.this.id]
 
-  user_data = base64encode(<<EOF
-#!/bin/bash
-set -e
+  # Bootstrap: install and start Apache on port 80 for ALB health checks
+  # Amazon Linux 2023 uses dnf
+  user_data = base64encode(<<-EOF
+    #!/bin/bash
+    set -euxo pipefail
 
-# Actualizar sistema
-dnf update -y
+    dnf install -y httpd
+    systemctl enable --now httpd
 
-# Instalar Apache
-dnf install -y httpd
-
-# Habilitar y arrancar Apache
-systemctl enable httpd
-systemctl start httpd
-
-# Página de prueba
-echo "ASG Instance - $(hostname)" > /var/www/html/index.html
-
-# SSM Agent (por seguridad, AL2023 ya lo trae)
-systemctl enable amazon-ssm-agent
-systemctl start amazon-ssm-agent
-EOF
+    echo "Hello from $(hostname -f) - $(date)" > /var/www/html/index.html
+  EOF
   )
 
   tag_specifications {
     resource_type = "instance"
-
     tags = {
-      Name = "${var.project_name}-asg-instance"
+      Name        = "${var.project_name}-${var.environment}-asg-instance"
+      Environment = var.environment
     }
   }
+
+  depends_on = [aws_iam_instance_profile.this]
 }
 
-# =========================
-# Auto Scaling Group
-# =========================
 resource "aws_autoscaling_group" "this" {
-  name                = "${var.project_name}-asg"
+  name                = "${var.project_name}-${var.environment}-asg"
   desired_capacity    = var.desired_capacity
   min_size            = var.min_size
   max_size            = 4
   vpc_zone_identifier = var.subnet_ids
 
+  # Attach ASG to ALB Target Group
   target_group_arns = [var.alb_target_group_arn]
+
+  # Use ALB/TG health checks (recommended)
+  health_check_type         = "ELB"
+  health_check_grace_period = 120
 
   launch_template {
     id      = aws_launch_template.this.id
@@ -127,69 +96,14 @@ resource "aws_autoscaling_group" "this" {
 
   tag {
     key                 = "Name"
-    value               = "${var.project_name}-asg"
+    value               = "${var.project_name}-${var.environment}-asg"
     propagate_at_launch = true
   }
 
-  depends_on = [
-    aws_security_group.this,
-    aws_iam_instance_profile.this
-  ]
-}
-
-# =========================
-# Scaling Policies
-# =========================
-resource "aws_autoscaling_policy" "scale_out" {
-  name                   = "${var.project_name}-scale-out"
-  autoscaling_group_name = aws_autoscaling_group.this.name
-  adjustment_type        = "ChangeInCapacity"
-  scaling_adjustment     = 1
-  cooldown               = 120
-}
-
-resource "aws_autoscaling_policy" "scale_in" {
-  name                   = "${var.project_name}-scale-in"
-  autoscaling_group_name = aws_autoscaling_group.this.name
-  adjustment_type        = "ChangeInCapacity"
-  scaling_adjustment     = -1
-  cooldown               = 300
-}
-
-# =========================
-# CloudWatch Alarms
-# =========================
-resource "aws_cloudwatch_metric_alarm" "cpu_high" {
-  alarm_name          = "${var.project_name}-cpu-high"
-  comparison_operator = "GreaterThanThreshold"
-  evaluation_periods  = 2
-  metric_name         = "CPUUtilization"
-  namespace           = "AWS/EC2"
-  period              = 60
-  statistic           = "Average"
-  threshold           = 60
-
-  dimensions = {
-    AutoScalingGroupName = aws_autoscaling_group.this.name
+  tag {
+    key                 = "Environment"
+    value               = var.environment
+    propagate_at_launch = true
   }
-
-  alarm_actions = [aws_autoscaling_policy.scale_out.arn]
-}
-
-resource "aws_cloudwatch_metric_alarm" "cpu_low" {
-  alarm_name          = "${var.project_name}-cpu-low"
-  comparison_operator = "LessThanThreshold"
-  evaluation_periods  = 2
-  metric_name         = "CPUUtilization"
-  namespace           = "AWS/EC2"
-  period              = 60
-  statistic           = "Average"
-  threshold           = 30
-
-  dimensions = {
-    AutoScalingGroupName = aws_autoscaling_group.this.name
-  }
-
-  alarm_actions = [aws_autoscaling_policy.scale_in.arn]
 }
 

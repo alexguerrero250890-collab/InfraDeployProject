@@ -49,6 +49,7 @@ variable "asg_sg_ids" {
 variable "bastion_sg_id" {
   type        = string
   description = "Security Group de la EC2 bastión que puede conectarse al RDS"
+  default     = null
 }
 
 variable "project_name" {
@@ -60,5 +61,10 @@ variable "multi_az" {
   type        = bool
   description = "Habilitar RDS Multi-AZ"
   default     = true
+}
+
+variable "environment" {
+  type        = string
+  description = "Environment name (dev, staging, prod)"
 }
 

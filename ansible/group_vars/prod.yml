@@ -1,0 +1,7 @@
+db_host: "<PROD_RDS_PROXY_ENDPOINT_SIN_:5432>"
+db_name: "infradeployprod"
+db_admin_user: "postgres"
+db_admin_password: "<PROD_DB_PASSWORD>"
+
+pg_extensions:
+  - pgcrypto

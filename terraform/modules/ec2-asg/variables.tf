@@ -36,3 +36,8 @@ variable "desired_capacity" {
   type        = number
 }
 
+variable "environment" {
+  type        = string
+  description = "Environment name (dev, staging, prod)"
+}
+

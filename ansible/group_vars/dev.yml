@@ -1,0 +1,52 @@
+# ================================
+# DEV - PostgreSQL Bootstrap
+# ================================
+
+# En DEV vamos a crear roles (igual que staging cuando lo montamos bien)
+enable_roles: true
+
+# Conexión vía port-forward (SSM o túnel) hacia DEV
+db_host: "127.0.0.1"
+db_port: 65432
+
+# Base de datos DEV
+db_name: "infradeploydev"
+
+# Usuario administrador (master definido en Terraform)
+db_admin_user: "postgres"
+
+# NO guardes la password real aquí (se pasa por CLI con -e db_admin_password=...)
+db_admin_password: "TU_PASSWORD_REAL_AQUI"
+
+# RDS/RDS Proxy normalmente requiere SSL
+db_ssl_mode: "require"
+
+# ================================
+# Roles / Usuarios a crear
+# ================================
+pg_roles:
+  - name: "app_user"
+    password: "APP_USER_PASSWORD_AQUI"
+    flags: "LOGIN"
+
+# ================================
+# Extensiones
+# ================================
+pg_extensions:
+  - pgcrypto
+
+# ================================
+# Schemas
+# ================================
+pg_schemas:
+  - name: "app"
+    owner: "postgres"
+
+# ================================
+# Privilegios
+# ================================
+pg_privs:
+  - type: "schema"
+    privs: "USAGE"
+    objs: "app"
+    roles: "app_user"
