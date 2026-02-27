@@ -1,0 +1,55 @@
+# ================================
+# STAGING - PostgreSQL Bootstrap
+# ================================
+
+# Feature flag: por defecto NO crear roles (evita ruido tipo item=None)
+enable_roles: false
+
+# Conexión vía port-forward (SSM o túnel)
+db_host: "127.0.0.1"
+db_port: 65432
+
+# Base de datos principal
+db_name: "infradeploystaging"
+
+# Usuario administrador (master definido en Terraform)
+db_admin_user: "postgres"
+
+# ⚠️ NO guardes la password real en git.
+# Déjalo como placeholder y pásalo por CLI:
+# -e "db_admin_password=TU_PASSWORD_REAL"
+db_admin_password: "TU_PASSWORD_REAL_AQUI"
+
+# RDS / Proxy suele requerir SSL
+db_ssl_mode: "require"
+
+# ================================
+# Roles / Usuarios (opcional)
+# Solo se aplica si enable_roles=true
+# ================================
+pg_roles:
+  - name: "app_user"
+    password: "SuperPassword123!"
+    flags: "LOGIN"
+
+# ================================
+# Extensiones
+# ================================
+pg_extensions:
+  - pgcrypto
+
+# ================================
+# Schemas
+# ================================
+pg_schemas:
+  - name: "app"
+    owner: "postgres"
+
+# ================================
+# Privilegios
+# ================================
+pg_privs:
+  - type: "schema"
+    privs: "USAGE"
+    objs: "app"
+    roles: "app_user"
