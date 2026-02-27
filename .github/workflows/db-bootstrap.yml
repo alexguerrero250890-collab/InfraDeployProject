@@ -78,6 +78,7 @@ jobs:
           # Final checks (fail if critical ones still missing)
           command -v session-manager-plugin >/dev/null 2>&1 || { echo "session-manager-plugin is required"; exit 1; }
           command -v ansible-playbook >/dev/null 2>&1 || { echo "ansible-playbook is required"; exit 1; }
+          command -v nc >/dev/null 2>&1 || { echo "nc is required"; exit 1; }
 
       # --------------------------------------------------
       # Resolve EC2 instance dynamically by Environment tag
@@ -114,11 +115,17 @@ jobs:
           LOCAL_PORT="65432"
           REMOTE_PORT="5432"
 
+          # Guard: ensure PROXY_ENDPOINT secret is present
+          if [[ -z "${{ secrets.PROXY_ENDPOINT }}" ]]; then
+            echo "ERROR: PROXY_ENDPOINT secret is empty/missing for environment '${{ inputs.environment }}'"
+            exit 1
+          fi
+
           # Start port-forward session in background
           aws ssm start-session \
             --target "${{ env.INSTANCE_ID }}" \
             --document-name "AWS-StartPortForwardingSessionToRemoteHost" \
-            --parameters "host=${{ secrets.DB_HOST }},portNumber=${REMOTE_PORT},localPortNumber=${LOCAL_PORT}" \
+            --parameters "host=${{ secrets.PROXY_ENDPOINT }},portNumber=${REMOTE_PORT},localPortNumber=${LOCAL_PORT}" \
             > ssm.log 2>&1 &
 
           SSM_PID="$!"
