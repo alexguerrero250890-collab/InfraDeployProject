@@ -1,0 +1,90 @@
+name: DB Bootstrap
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Target environment"
+        required: true
+        type: choice
+        options:
+          - dev
+          - staging
+          - prod
+
+jobs:
+  bootstrap:
+    name: Bootstrap PostgreSQL
+    runs-on: self-hosted
+    environment: ${{ inputs.environment }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # --------------------------------------------------
+      # Resolve EC2 instance dynamically by Environment tag
+      # --------------------------------------------------
+      - name: Resolve EC2 instance
+        id: resolve
+        run: |
+          INSTANCE_ID=$(aws ec2 describe-instances \
+            --filters "Name=tag:Environment,Values=${{ inputs.environment }}" \
+                      "Name=instance-state-name,Values=running" \
+            --query "Reservations[].Instances[].InstanceId | [0]" \
+            --output text)
+
+          if [ -z "$INSTANCE_ID" ] || [ "$INSTANCE_ID" == "None" ]; then
+            echo "No running instance found for environment: ${{ inputs.environment }}"
+            exit 1
+          fi
+
+          echo "INSTANCE_ID=$INSTANCE_ID" >> $GITHUB_ENV
+          echo "Using instance: $INSTANCE_ID"
+
+      # --------------------------------------------------
+      # Start SSM tunnel to RDS Proxy
+      # --------------------------------------------------
+      - name: Start SSM tunnel
+        run: |
+          aws ssm start-session \
+            --target $INSTANCE_ID \
+            --document-name AWS-StartPortForwardingSessionToRemoteHost \
+            --parameters "host=${{ secrets.DB_HOST }},portNumber=5432,localPortNumber=65432" \
+            > ssm.log 2>&1 &
+
+          echo "Waiting for tunnel..."
+          sleep 10
+
+      # --------------------------------------------------
+      # Install Ansible collection
+      # --------------------------------------------------
+      - name: Install PostgreSQL collection
+        run: ansible-galaxy collection install community.postgresql
+
+      # --------------------------------------------------
+      # Execute Playbook
+      # --------------------------------------------------
+      - name: Run PostgreSQL bootstrap
+        env:
+          DB_ADMIN_USER: ${{ secrets.DB_ADMIN_USER }}
+          DB_ADMIN_PASSWORD: ${{ secrets.DB_ADMIN_PASSWORD }}
+          DB_NAME: ${{ secrets.DB_NAME }}
+          APP_USER_PASSWORD: ${{ secrets.APP_USER_PASSWORD }}
+        run: |
+          ansible-playbook ansible/playbooks/postgres_bootstrap.yml \
+            -e "db_host=127.0.0.1" \
+            -e "db_port=65432" \
+            -e "db_name=${DB_NAME}" \
+            -e "db_admin_user=${DB_ADMIN_USER}" \
+            -e "db_admin_password=${DB_ADMIN_PASSWORD}" \
+            -e "enable_roles=true" \
+            -e "pg_roles=[{'name':'app_user','password':'${APP_USER_PASSWORD}','flags':'LOGIN'}]"
+
+      # --------------------------------------------------
+      # Cleanup
+      # --------------------------------------------------
+      - name: Kill SSM tunnel
+        if: always()
+        run: |
+          pkill -f "start-session" || true
