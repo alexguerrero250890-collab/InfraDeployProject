@@ -35,7 +35,6 @@ jobs:
 
           command -v aws >/dev/null 2>&1 || { echo "aws cli not found"; exit 1; }
 
-          # Best-effort installs
           install_with_yum() { sudo yum -y install "$@" || true; }
           install_with_apt() { sudo apt-get update -y && sudo apt-get install -y "$@" || true; }
 
@@ -75,7 +74,6 @@ jobs:
             fi
           fi
 
-          # Final checks
           command -v session-manager-plugin >/dev/null 2>&1 || { echo "session-manager-plugin is required"; exit 1; }
           command -v ansible-playbook >/dev/null 2>&1 || { echo "ansible-playbook is required"; exit 1; }
           command -v nc >/dev/null 2>&1 || { echo "nc is required"; exit 1; }
@@ -152,19 +150,7 @@ jobs:
           ansible-galaxy collection install community.postgresql
 
       # --------------------------------------------------
-      # Verify we are using the correct playbook (debug)
-      # --------------------------------------------------
-      - name: Verify playbook exists
-        shell: bash
-        run: |
-          set -euo pipefail
-          echo "PWD=$(pwd)"
-          ls -la ansible/playbooks
-          echo "--- head of postgres_bootstrap.yml ---"
-          head -n 10 ansible/playbooks/postgres_bootstrap.yml
-
-      # --------------------------------------------------
-      # Execute Playbook (THIS MUST POINT TO postgres_bootstrap.yml)
+      # Run playbook (FORCED absolute path + debug)
       # --------------------------------------------------
       - name: Run PostgreSQL bootstrap
         shell: bash
@@ -176,7 +162,27 @@ jobs:
         run: |
           set -euo pipefail
 
-          ansible-playbook ansible/playbooks/postgres_bootstrap.yml \
+          echo "PWD=$(pwd)"
+          echo "GITHUB_WORKSPACE=${GITHUB_WORKSPACE}"
+
+          echo "Listing ansible/playbooks:"
+          ls -la ansible/playbooks || true
+
+          echo "Searching for *bootstrap*.yml files (to detect any wrong file like ***_bootstrap.yml):"
+          find ansible/playbooks -maxdepth 1 -type f -name "*bootstrap*.yml" -print -exec head -n 3 {} \; || true
+
+          PLAYBOOK="${GITHUB_WORKSPACE}/ansible/playbooks/postgres_bootstrap.yml"
+          echo "Using playbook: $PLAYBOOK"
+
+          if [[ ! -f "$PLAYBOOK" ]]; then
+            echo "ERROR: Expected playbook not found at $PLAYBOOK"
+            exit 1
+          fi
+
+          echo "--- head of postgres_bootstrap.yml ---"
+          head -n 10 "$PLAYBOOK"
+
+          ansible-playbook "$PLAYBOOK" \
             -e "db_host=127.0.0.1" \
             -e "db_port=65432" \
             -e "db_name=${DB_NAME}" \
