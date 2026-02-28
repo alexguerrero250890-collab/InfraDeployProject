@@ -12,6 +12,12 @@ on:
           - staging
           - prod
 
+  workflow_call:
+    inputs:
+      environment:
+        required: true
+        type: string
+
 permissions:
   contents: read
 
@@ -25,9 +31,6 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # --------------------------------------------------
-      # Resolve EC2 instance dynamically
-      # --------------------------------------------------
       - name: Resolve EC2 instance
         shell: bash
         run: |
@@ -47,9 +50,6 @@ jobs:
           echo "INSTANCE_ID=$INSTANCE_ID" >> "$GITHUB_ENV"
           echo "Using instance: $INSTANCE_ID"
 
-      # --------------------------------------------------
-      # Start SSM tunnel (PROXY_ENDPOINT from Environment secrets)
-      # --------------------------------------------------
       - name: Start SSM tunnel
         shell: bash
         env:
@@ -79,18 +79,12 @@ jobs:
           nc -z 127.0.0.1 65432 || { echo "Tunnel failed"; tail -n 80 ssm.log; exit 1; }
           echo "Tunnel established."
 
-      # --------------------------------------------------
-      # Install Ansible collection
-      # --------------------------------------------------
       - name: Install PostgreSQL collection
         shell: bash
         run: |
           set -euo pipefail
           ansible-galaxy collection install community.postgresql
 
-      # --------------------------------------------------
-      # Run Playbook
-      # --------------------------------------------------
       - name: Run PostgreSQL bootstrap
         shell: bash
         env:
@@ -115,9 +109,6 @@ jobs:
             -e "enable_roles=true" \
             -e "pg_roles=[{'name':'app_user','password':'${APP_USER_PASSWORD}','flags':'LOGIN'}]"
 
-      # --------------------------------------------------
-      # Cleanup
-      # --------------------------------------------------
       - name: Stop SSM tunnel
         if: always()
         shell: bash
