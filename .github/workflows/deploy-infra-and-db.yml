@@ -1,0 +1,54 @@
+name: Deploy Infra + DB Bootstrap
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Target environment"
+        required: true
+        type: choice
+        options:
+          - dev
+          - staging
+          - prod
+
+permissions:
+  contents: read
+
+jobs:
+  terraform_apply:
+    name: Terraform Apply
+    runs-on: self-hosted
+    environment: ${{ inputs.environment }}
+
+    defaults:
+      run:
+        shell: bash
+        working-directory: environments/${{ inputs.environment }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Terraform Init
+        run: |
+          set -euo pipefail
+          terraform init -input=false
+
+      - name: Terraform Validate
+        run: |
+          set -euo pipefail
+          terraform validate
+
+      - name: Terraform Apply
+        run: |
+          set -euo pipefail
+          terraform apply -auto-approve -input=false
+
+  db_bootstrap:
+    name: DB Bootstrap
+    needs: terraform_apply
+    uses: ./.github/workflows/db-bootstrap.yml
+    with:
+      environment: ${{ inputs.environment }}
+    secrets: inherit
