@@ -12,11 +12,18 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: terraform-${{ inputs.environment }}
+  cancel-in-progress: false
+
 jobs:
   terraform_apply:
-    name: Terraform Apply
+    name: Terraform Plan + Apply (guardrails)
     runs-on: self-hosted
     environment: ${{ inputs.environment }}
+
+    env:
+      TF_IN_AUTOMATION: "true"
 
     defaults:
       run:
@@ -26,6 +33,21 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+
+      - name: Ensure tools (jq)
+        run: |
+          set -euo pipefail
+
+          if ! command -v jq >/dev/null 2>&1; then
+            if command -v yum >/dev/null 2>&1; then
+              sudo yum -y install jq
+            elif command -v apt-get >/dev/null 2>&1; then
+              sudo apt-get update -y
+              sudo apt-get install -y jq
+            fi
+          fi
+
+          command -v jq >/dev/null 2>&1 || { echo "jq is required"; exit 1; }
 
       - name: Terraform Init
         run: |
@@ -37,16 +59,45 @@ jobs:
           set -euo pipefail
           terraform validate
 
-      - name: Terraform Apply
+      - name: Terraform Plan
         run: |
           set -euo pipefail
-          terraform apply -auto-approve -input=false
+          terraform plan -out=tfplan -input=false -lock-timeout=10m
+          terraform show -json tfplan > tfplan.json
+
+      - name: Guardrail (prevent ASG scale-to-zero)
+        run: |
+          set -euo pipefail
+
+          # Bloquea si algún recurso en el plan deja min_size o desired_capacity en 0
+          # (incluye ASG u otros recursos que expongan esos campos)
+          if jq -e '
+            .resource_changes[]
+            | select(.change.after != null)
+            | select(
+                ((.change.after.min_size? // 1) == 0)
+                or
+                ((.change.after.desired_capacity? // 1) == 0)
+              )
+          ' tfplan.json > /dev/null; then
+            echo "Guardrail triggered: plan sets min_size or desired_capacity to 0. Aborting before apply."
+            echo "Tip: revisa variables del ASG o defaults en el entorno."
+            exit 1
+          fi
+
+          echo "Guardrail passed."
+
+      - name: Terraform Apply (from plan)
+        run: |
+          set -euo pipefail
+          terraform apply -auto-approve -input=false -lock-timeout=10m tfplan
 
   wait_for_instance:
     name: Wait for EC2 (SSM target)
     needs: terraform_apply
     runs-on: self-hosted
     environment: ${{ inputs.environment }}
+
     steps:
       - name: Wait until an instance is running (by Name tag)
         shell: bash
