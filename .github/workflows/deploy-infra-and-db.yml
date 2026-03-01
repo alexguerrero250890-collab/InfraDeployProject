@@ -7,10 +7,7 @@ on:
         description: "Target environment"
         required: true
         type: choice
-        options:
-          - dev
-          - staging
-          - prod
+        options: [dev, staging, prod]
 
 permissions:
   contents: read
