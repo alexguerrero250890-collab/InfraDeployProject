@@ -42,9 +42,44 @@ jobs:
           set -euo pipefail
           terraform apply -auto-approve -input=false
 
+  wait_for_instance:
+    name: Wait for EC2 (SSM target)
+    needs: terraform_apply
+    runs-on: self-hosted
+    environment: ${{ inputs.environment }}
+    steps:
+      - name: Wait until an instance is running (by Name tag)
+        shell: bash
+        env:
+          SSM_TARGET_TAG_NAME: ${{ secrets.SSM_TARGET_TAG_NAME }}
+        run: |
+          set -euo pipefail
+
+          [[ -n "${SSM_TARGET_TAG_NAME:-}" ]] || { echo "SSM_TARGET_TAG_NAME missing (Environment secret)"; exit 1; }
+
+          echo "Waiting for a running instance with Name=${SSM_TARGET_TAG_NAME} ..."
+          for i in {1..60}; do
+            INSTANCE_ID=$(aws ec2 describe-instances \
+              --filters "Name=tag:Name,Values=${SSM_TARGET_TAG_NAME}" \
+                        "Name=instance-state-name,Values=running" \
+              --query "Reservations[].Instances[].InstanceId | [0]" \
+              --output text)
+
+            if [[ -n "$INSTANCE_ID" && "$INSTANCE_ID" != "None" ]]; then
+              echo "Found running instance: $INSTANCE_ID"
+              exit 0
+            fi
+
+            sleep 10
+          done
+
+          echo "Timed out waiting for running instance with Name=${SSM_TARGET_TAG_NAME}."
+          echo "This usually means your ASG desired/min is 0, or scaling hasn't created instances."
+          exit 1
+
   db_bootstrap:
     name: DB Bootstrap
-    needs: terraform_apply
+    needs: wait_for_instance
     uses: ./.github/workflows/db-bootstrap.yml
     with:
       environment: ${{ inputs.environment }}

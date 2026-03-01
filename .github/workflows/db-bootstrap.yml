@@ -48,18 +48,29 @@ jobs:
           command -v psql >/dev/null 2>&1 || { echo "psql is required"; exit 1; }
           command -v nc   >/dev/null 2>&1 || { echo "nc is required"; exit 1; }
 
-      - name: Resolve EC2 instance (SSM target)
+      - name: Resolve EC2 instance (SSM target by Name tag)
         shell: bash
+        env:
+          SSM_TARGET_TAG_NAME: ${{ secrets.SSM_TARGET_TAG_NAME }}
         run: |
           set -euo pipefail
+
+          [[ -n "${SSM_TARGET_TAG_NAME:-}" ]] || { echo "SSM_TARGET_TAG_NAME missing (Environment secret)"; exit 1; }
+
+          # Pick first running instance with tag Name = SSM_TARGET_TAG_NAME
           INSTANCE_ID=$(aws ec2 describe-instances \
-            --filters "Name=tag:Environment,Values=${{ inputs.environment }}" \
+            --filters "Name=tag:Name,Values=${SSM_TARGET_TAG_NAME}" \
                       "Name=instance-state-name,Values=running" \
             --query "Reservations[].Instances[].InstanceId | [0]" \
             --output text)
 
           if [[ -z "$INSTANCE_ID" || "$INSTANCE_ID" == "None" ]]; then
-            echo "No running instance found for environment: ${{ inputs.environment }}"
+            echo "No running instance found with Name tag: ${SSM_TARGET_TAG_NAME}"
+            echo "Debug: listing running instances Name/Environment tags:"
+            aws ec2 describe-instances \
+              --filters "Name=instance-state-name,Values=running" \
+              --query "Reservations[].Instances[].{Id:InstanceId,Name:Tags[?Key=='Name']|[0].Value,Env:Tags[?Key=='Environment']|[0].Value}" \
+              --output table || true
             exit 1
           fi
 
