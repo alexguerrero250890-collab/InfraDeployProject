@@ -1,83 +1,48 @@
-name: DB Bootstrap
+---
+- name: PostgreSQL Bootstrap
+  hosts: localhost
+  gather_facts: false
 
-on:
-  workflow_dispatch:
-    inputs:
-      environment:
-        description: "Target environment"
-        required: true
-        type: choice
-        options:
-          - dev
-          - staging
-          - prod
+  collections:
+    - community.postgresql
 
-jobs:
-  bootstrap:
-    runs-on: self-hosted
-    environment: ${{ inputs.environment }}
+  vars:
+    login_host: "{{ db_host }}"
+    login_port: "{{ db_port }}"
+    login_user: "{{ db_admin_user }}"
+    login_password: "{{ db_admin_password }}"
+    login_db: "{{ db_name }}"
 
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+  tasks:
+    - name: Ensure database exists
+      community.postgresql.postgresql_db:
+        name: "{{ db_name }}"
+        state: present
+        login_host: "{{ login_host }}"
+        login_port: "{{ login_port }}"
+        login_user: "{{ login_user }}"
+        login_password: "{{ login_password }}"
 
-      # --------------------------------------------
-      # Resolve EC2 instance dynamically
-      # --------------------------------------------
-      - name: Resolve EC2 instance by Environment tag
-        id: resolve
-        run: |
-          INSTANCE_ID=$(aws ec2 describe-instances \
-            --filters "Name=tag:Environment,Values=${{ inputs.environment }}" \
-                      "Name=instance-state-name,Values=running" \
-            --query "Reservations[].Instances[].InstanceId | [0]" \
-            --output text)
+    - name: Ensure roles exist
+      community.postgresql.postgresql_user:
+        name: "{{ item.name }}"
+        password: "{{ item.password }}"
+        role_attr_flags: "{{ item.flags | default('LOGIN') }}"
+        state: present
+        login_host: "{{ login_host }}"
+        login_port: "{{ login_port }}"
+        login_user: "{{ login_user }}"
+        login_password: "{{ login_password }}"
+        db: "{{ login_db }}"
+      loop: "{{ pg_roles | default([]) }}"
 
-          if [ "$INSTANCE_ID" == "None" ] || [ -z "$INSTANCE_ID" ]; then
-            echo "No running instance found for environment"
-            exit 1
-          fi
-
-          echo "INSTANCE_ID=$INSTANCE_ID" >> $GITHUB_ENV
-          echo "Using instance: $INSTANCE_ID"
-
-      # --------------------------------------------
-      # Start SSM Tunnel to RDS Proxy
-      # --------------------------------------------
-      - name: Start SSM tunnel
-        run: |
-          aws ssm start-session \
-            --target $INSTANCE_ID \
-            --document-name AWS-StartPortForwardingSessionToRemoteHost \
-            --parameters "host=${{ secrets.DB_HOST }},portNumber=5432,localPortNumber=65432" \
-            > ssm.log 2>&1 &
-
-          sleep 10
-
-      # --------------------------------------------
-      # Execute Ansible Playbook
-      # --------------------------------------------
-      - name: Run PostgreSQL bootstrap
-        env:
-          DB_ADMIN_USER: ${{ secrets.DB_ADMIN_USER }}
-          DB_ADMIN_PASSWORD: ${{ secrets.DB_ADMIN_PASSWORD }}
-          DB_NAME: ${{ secrets.DB_NAME }}
-          APP_USER_PASSWORD: ${{ secrets.APP_USER_PASSWORD }}
-        run: |
-          ansible-playbook ansible/playbooks/postgres_bootstrap.yml \
-            -e "db_host=127.0.0.1" \
-            -e "db_port=65432" \
-            -e "db_name=${DB_NAME}" \
-            -e "db_admin_user=${DB_ADMIN_USER}" \
-            -e "db_admin_password=${DB_ADMIN_PASSWORD}" \
-            -e "enable_roles=true" \
-            -e "pg_roles=[{'name':'app_user','password':'${APP_USER_PASSWORD}','flags':'LOGIN'}]" \
-            -e "pg_extensions=['uuid-ossp']"
-
-      # --------------------------------------------
-      # Cleanup
-      # --------------------------------------------
-      - name: Kill SSM tunnel
-        if: always()
-        run: |
-          pkill -f "start-session" || true
+    - name: Ensure extensions are present (optional)
+      community.postgresql.postgresql_ext:
+        name: "{{ item }}"
+        db: "{{ db_name }}"
+        state: present
+        login_host: "{{ login_host }}"
+        login_port: "{{ login_port }}"
+        login_user: "{{ login_user }}"
+        login_password: "{{ login_password }}"
+      loop: "{{ pg_extensions | default([]) }}"
