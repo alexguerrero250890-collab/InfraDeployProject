@@ -65,6 +65,48 @@ jobs:
           command -v nc   >/dev/null 2>&1 || { echo "nc is required"; exit 1; }
           command -v session-manager-plugin >/dev/null 2>&1 || { echo "session-manager-plugin is required"; exit 1; }
 
+      - name: Load DB admin credentials from Secrets Manager (source of truth)
+        shell: bash
+        env:
+          PROXY_SECRET_ARN: ${{ secrets.PROXY_SECRET_ARN }}
+        run: |
+          set -euo pipefail
+          [[ -n "${PROXY_SECRET_ARN:-}" ]] || { echo "PROXY_SECRET_ARN missing (Environment secret)"; exit 1; }
+
+          SECRET_JSON=$(aws secretsmanager get-secret-value \
+            --secret-id "$PROXY_SECRET_ARN" \
+            --query SecretString \
+            --output text)
+
+          # Parse JSON safely (no jq dependency)
+          DB_ADMIN_USER=$(python3 - <<'PY'
+import json, os
+s=os.environ["SECRET_JSON"]
+print(json.loads(s)["username"])
+PY
+          )
+
+          DB_ADMIN_PASSWORD=$(python3 - <<'PY'
+import json, os
+s=os.environ["SECRET_JSON"]
+print(json.loads(s)["password"])
+PY
+          )
+
+          # Export for next steps
+          {
+            echo "DB_ADMIN_USER=$DB_ADMIN_USER"
+            echo "DB_ADMIN_PASSWORD=$DB_ADMIN_PASSWORD"
+          } >> "$GITHUB_ENV"
+
+          # Fingerprint (no leaks)
+          echo "Loaded DB admin user from Secrets Manager: $DB_ADMIN_USER"
+          echo "DB_ADMIN_PASSWORD length: ${#DB_ADMIN_PASSWORD}"
+          echo -n "$DB_ADMIN_PASSWORD" | sha256sum | awk '{print "DB_ADMIN_PASSWORD sha256: "$1}'
+
+        env:
+          SECRET_JSON: ${{ env.SECRET_JSON }}
+
       - name: Resolve EC2 instance (SSM target by Name tag)
         shell: bash
         env:
@@ -82,7 +124,6 @@ jobs:
 
           if [[ -z "$INSTANCE_ID" || "$INSTANCE_ID" == "None" ]]; then
             echo "No running instance found with Name tag: ${SSM_TARGET_TAG_NAME}"
-            echo "Debug: listing running instances Name/Environment tags:"
             aws ec2 describe-instances \
               --filters "Name=instance-state-name,Values=running" \
               --query "Reservations[].Instances[].{Id:InstanceId,Name:Tags[?Key=='Name']|[0].Value,Env:Tags[?Key=='Environment']|[0].Value}" \
@@ -105,7 +146,6 @@ jobs:
 
           cleanup() {
             if [[ -n "${SSM_PID:-}" ]]; then
-              echo "Stopping SSM tunnel PID=${SSM_PID}"
               kill "${SSM_PID}" >/dev/null 2>&1 || true
             fi
           }
@@ -119,15 +159,13 @@ jobs:
 
           SSM_PID=$!
           echo "SSM_PID=$SSM_PID" >> "$GITHUB_ENV"
-          echo "Started SSM tunnel PID=$SSM_PID"
 
           for i in {1..30}; do
             nc -z 127.0.0.1 65432 && break
             sleep 1
           done
 
-          nc -z 127.0.0.1 65432 || { echo "Tunnel failed"; tail -n 120 ssm.log || true; exit 1; }
-          echo "Tunnel established."
+          nc -z 127.0.0.1 65432 || { tail -n 120 ssm.log || true; exit 1; }
 
       - name: Install Ansible PostgreSQL collection
         shell: bash
@@ -138,8 +176,6 @@ jobs:
       - name: Run PostgreSQL bootstrap
         shell: bash
         env:
-          DB_ADMIN_USER: ${{ secrets.DB_ADMIN_USER }}
-          DB_ADMIN_PASSWORD: ${{ secrets.DB_ADMIN_PASSWORD }}
           DB_NAME: ${{ secrets.DB_NAME }}
           APP_USER_PASSWORD: ${{ secrets.APP_USER_PASSWORD }}
         run: |
@@ -148,7 +184,6 @@ jobs:
           echo "Environment input: ${{ inputs.environment }}"
           echo "DB_NAME=$DB_NAME"
           echo "DB_ADMIN_USER=$DB_ADMIN_USER"
-
           echo "DB_ADMIN_PASSWORD length: ${#DB_ADMIN_PASSWORD}"
           echo -n "$DB_ADMIN_PASSWORD" | sha256sum | awk '{print "DB_ADMIN_PASSWORD sha256: "$1}'
 
@@ -158,7 +193,6 @@ jobs:
             -c "SELECT 1;"
 
           PLAYBOOK="${GITHUB_WORKSPACE}/ansible/playbooks/postgres_bootstrap.yml"
-          echo "Using playbook: $PLAYBOOK"
           test -f "$PLAYBOOK" || { echo "Playbook not found"; exit 1; }
 
           ansible-playbook "$PLAYBOOK" \
@@ -176,8 +210,5 @@ jobs:
         run: |
           set -euo pipefail
           if [[ -n "${SSM_PID:-}" ]]; then
-            echo "Stopping SSM tunnel PID=${SSM_PID}"
             kill "${SSM_PID}" >/dev/null 2>&1 || true
-          else
-            echo "SSM_PID not set; nothing to stop"
           fi
