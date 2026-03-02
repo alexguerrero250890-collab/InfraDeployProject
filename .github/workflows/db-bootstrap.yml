@@ -17,6 +17,9 @@ on:
       environment:
         required: true
         type: string
+      asg_name:
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -41,26 +44,20 @@ jobs:
           install_with_apt() { sudo apt-get update -y && sudo apt-get install -y "$@" || true; }
 
           if ! command -v psql >/dev/null 2>&1; then
-            if command -v yum >/dev/null 2>&1; then
-              install_with_yum postgresql
-            elif command -v apt-get >/dev/null 2>&1; then
-              install_with_apt postgresql-client
+            if command -v yum >/dev/null 2>&1; then install_with_yum postgresql
+            elif command -v apt-get >/dev/null 2>&1; then install_with_apt postgresql-client
             fi
           fi
 
           if ! command -v nc >/dev/null 2>&1; then
-            if command -v yum >/dev/null 2>&1; then
-              install_with_yum nmap-ncat
-            elif command -v apt-get >/dev/null 2>&1; then
-              install_with_apt netcat-openbsd
+            if command -v yum >/dev/null 2>&1; then install_with_yum nmap-ncat
+            elif command -v apt-get >/dev/null 2>&1; then install_with_apt netcat-openbsd
             fi
           fi
 
           if ! command -v session-manager-plugin >/dev/null 2>&1; then
-            if command -v yum >/dev/null 2>&1; then
-              install_with_yum session-manager-plugin
-            elif command -v apt-get >/dev/null 2>&1; then
-              install_with_apt session-manager-plugin
+            if command -v yum >/dev/null 2>&1; then install_with_yum session-manager-plugin
+            elif command -v apt-get >/dev/null 2>&1; then install_with_apt session-manager-plugin
             fi
           fi
 
@@ -93,25 +90,31 @@ jobs:
           echo "DB_ADMIN_PASSWORD length: ${#DB_ADMIN_PASSWORD}"
           echo -n "$DB_ADMIN_PASSWORD" | sha256sum | awk '{print "DB_ADMIN_PASSWORD sha256: "$1}'
 
-      - name: Resolve EC2 instance (SSM target by Name tag)
+      - name: Resolve EC2 instance (prefer ASG, fallback to Name tag)
         shell: bash
         env:
+          ASG_NAME: ${{ inputs.asg_name }}
           SSM_TARGET_TAG_NAME: ${{ secrets.SSM_TARGET_TAG_NAME }}
         run: |
           set -euo pipefail
-          [[ -n "${SSM_TARGET_TAG_NAME:-}" ]] || { echo "SSM_TARGET_TAG_NAME missing (Environment secret)"; exit 1; }
 
-          INSTANCE_ID="$(aws ec2 describe-instances \
-            --filters "Name=tag:Name,Values=${SSM_TARGET_TAG_NAME}" "Name=instance-state-name,Values=running" \
-            --query "Reservations[].Instances[].InstanceId | [0]" \
-            --output text)"
+          if [[ -n "${ASG_NAME:-}" ]]; then
+            echo "Resolving instance from ASG: ${ASG_NAME}"
+            INSTANCE_ID=$(aws autoscaling describe-auto-scaling-groups \
+              --auto-scaling-group-names "$ASG_NAME" \
+              --query "AutoScalingGroups[0].Instances[?LifecycleState=='InService'].InstanceId | [0]" \
+              --output text)
+          else
+            [[ -n "${SSM_TARGET_TAG_NAME:-}" ]] || { echo "SSM_TARGET_TAG_NAME missing (Environment secret)"; exit 1; }
+            echo "Resolving instance by Name tag: ${SSM_TARGET_TAG_NAME}"
+            INSTANCE_ID=$(aws ec2 describe-instances \
+              --filters "Name=tag:Name,Values=${SSM_TARGET_TAG_NAME}" "Name=instance-state-name,Values=running" \
+              --query "Reservations[].Instances[].InstanceId | [0]" \
+              --output text)
+          fi
 
           if [[ -z "$INSTANCE_ID" || "$INSTANCE_ID" == "None" ]]; then
-            echo "No running instance found with Name tag: ${SSM_TARGET_TAG_NAME}"
-            aws ec2 describe-instances \
-              --filters "Name=instance-state-name,Values=running" \
-              --query "Reservations[].Instances[].{Id:InstanceId,Name:Tags[?Key=='Name']|[0].Value,Env:Tags[?Key=='Environment']|[0].Value}" \
-              --output table || true
+            echo "No running/InService instance found."
             exit 1
           fi
 
@@ -168,8 +171,6 @@ jobs:
           echo "Environment input: ${{ inputs.environment }}"
           echo "DB_NAME=$DB_NAME"
           echo "DB_ADMIN_USER=$DB_ADMIN_USER"
-          echo "DB_ADMIN_PASSWORD length: ${#DB_ADMIN_PASSWORD}"
-          echo -n "$DB_ADMIN_PASSWORD" | sha256sum | awk '{print "DB_ADMIN_PASSWORD sha256: "$1}'
 
           PGPASSWORD="$DB_ADMIN_PASSWORD" psql \
             "host=127.0.0.1 port=65432 dbname=$DB_NAME user=$DB_ADMIN_USER sslmode=require" \

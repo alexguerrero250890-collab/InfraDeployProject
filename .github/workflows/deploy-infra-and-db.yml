@@ -25,6 +25,9 @@ jobs:
     env:
       TF_IN_AUTOMATION: "true"
 
+    outputs:
+      asg_name: ${{ steps.export_outputs.outputs.asg_name }}
+
     defaults:
       run:
         shell: bash
@@ -65,26 +68,6 @@ jobs:
           fi
           command -v jq >/dev/null 2>&1 || { echo "jq is required"; exit 1; }
 
-      - name: Show ASG capacity from checked-out code (debug)
-        run: |
-          set -euo pipefail
-          echo "Repo SHA:"
-          git rev-parse HEAD
-          echo
-          echo "PWD: $(pwd)"
-          echo "Listing *.tf and *.tfvars in environments/${{ inputs.environment }}:"
-          ls -la
-          echo
-          echo "Searching min_size / desired_capacity in this environment:"
-          grep -nE "min_size\s*=|desired_capacity\s*=" -n *.tf || true
-          echo
-          echo "Context around module autoscaling (if present):"
-          awk '
-            /module "autoscaling"/ {show=1}
-            show {print}
-            show && /^\}/ {exit}
-          ' main.tf || true
-
       - name: Terraform Init
         run: |
           set -euo pipefail
@@ -106,18 +89,20 @@ jobs:
         run: |
           set -euo pipefail
 
-          echo "ASG changes (before -> after) from plan:"
+          echo "ASG changes (module.autoscaling only) from plan:"
           jq -r '
             .resource_changes[]
             | select(.type == "aws_autoscaling_group")
+            | select(.address | test("module\\.autoscaling"))
             | select(.change.before != null and .change.after != null)
             | " - \(.address)\n    min_size: \(.change.before.min_size // "null") -> \(.change.after.min_size // "null")\n    desired_capacity: \(.change.before.desired_capacity // "null") -> \(.change.after.desired_capacity // "null")"
           ' tfplan.json || true
 
-          # Trigger only if the plan scales an ASG DOWN to 0 from >0
+          # Block only if OUR ASG (module.autoscaling) scales down to 0 from >0
           if jq -e '
             .resource_changes[]
             | select(.type == "aws_autoscaling_group")
+            | select(.address | test("module\\.autoscaling"))
             | select(.change.before != null and .change.after != null)
             | .change as $c
             | (
@@ -131,9 +116,8 @@ jobs:
               )
           ' tfplan.json > /dev/null; then
             echo
-            echo "Guardrail triggered: plan would scale ASG DOWN to 0."
-            echo "This is caused by your STAGING terraform config (main.tf / module defaults / vars), not by AWS runtime."
-            echo "Fix it by setting min_size/desired_capacity > 0 in environments/staging/main.tf (or the module inputs)."
+            echo "Guardrail triggered: module.autoscaling would scale ASG DOWN to 0. Aborting."
+            echo "Fix: ensure min_size/desired_capacity/max_size in your autoscaling module inputs are >0."
             exit 1
           fi
 
@@ -144,38 +128,44 @@ jobs:
           set -euo pipefail
           terraform apply -auto-approve -input=false -lock-timeout=10m tfplan
 
+      - name: Export outputs for downstream jobs
+        id: export_outputs
+        run: |
+          set -euo pipefail
+          ASG_NAME="$(terraform output -raw asg_name)"
+          echo "asg_name=$ASG_NAME" >> "$GITHUB_OUTPUT"
+          echo "ASG_NAME=$ASG_NAME"
+
   wait_for_instance:
-    name: Wait for EC2 (SSM target)
+    name: Wait for EC2 (from ASG)
     needs: terraform_apply
     runs-on: self-hosted
     environment: ${{ inputs.environment }}
 
     steps:
-      - name: Wait until an instance is running (by Name tag)
+      - name: Wait until an instance is InService in the ASG
         shell: bash
         env:
-          SSM_TARGET_TAG_NAME: ${{ secrets.SSM_TARGET_TAG_NAME }}
+          ASG_NAME: ${{ needs.terraform_apply.outputs.asg_name }}
         run: |
           set -euo pipefail
-          [[ -n "${SSM_TARGET_TAG_NAME:-}" ]] || { echo "SSM_TARGET_TAG_NAME missing (Environment secret)"; exit 1; }
+          [[ -n "${ASG_NAME:-}" ]] || { echo "ASG_NAME missing from terraform outputs"; exit 1; }
 
-          echo "Waiting for a running instance with Name=${SSM_TARGET_TAG_NAME} ..."
+          echo "Waiting for InService instance in ASG: ${ASG_NAME}"
           for i in {1..60}; do
-            INSTANCE_ID=$(aws ec2 describe-instances \
-              --filters "Name=tag:Name,Values=${SSM_TARGET_TAG_NAME}" \
-                        "Name=instance-state-name,Values=running" \
-              --query "Reservations[].Instances[].InstanceId | [0]" \
+            INSTANCE_ID=$(aws autoscaling describe-auto-scaling-groups \
+              --auto-scaling-group-names "$ASG_NAME" \
+              --query "AutoScalingGroups[0].Instances[?LifecycleState=='InService'].InstanceId | [0]" \
               --output text)
 
             if [[ -n "$INSTANCE_ID" && "$INSTANCE_ID" != "None" ]]; then
-              echo "Found running instance: $INSTANCE_ID"
+              echo "Found InService instance: $INSTANCE_ID"
               exit 0
             fi
-
             sleep 10
           done
 
-          echo "Timed out waiting for running instance with Name=${SSM_TARGET_TAG_NAME}."
+          echo "Timed out waiting for InService instances in ASG: ${ASG_NAME}"
           exit 1
 
   db_bootstrap:
@@ -184,4 +174,5 @@ jobs:
     uses: ./.github/workflows/db-bootstrap.yml
     with:
       environment: ${{ inputs.environment }}
+      asg_name: ${{ needs.terraform_apply.outputs.asg_name }}
     secrets: inherit
