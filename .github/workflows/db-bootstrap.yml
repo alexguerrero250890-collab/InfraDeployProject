@@ -7,7 +7,10 @@ on:
         description: "Target environment"
         required: true
         type: choice
-        options: [dev, staging, prod]
+        options:
+          - dev
+          - staging
+          - prod
 
   workflow_call:
     inputs:
@@ -38,25 +41,31 @@ jobs:
           install_with_apt() { sudo apt-get update -y && sudo apt-get install -y "$@" || true; }
 
           if ! command -v psql >/dev/null 2>&1; then
-            if command -v yum >/dev/null 2>&1; then install_with_yum postgresql
-            elif command -v apt-get >/dev/null 2>&1; then install_with_apt postgresql-client
+            if command -v yum >/dev/null 2>&1; then
+              install_with_yum postgresql
+            elif command -v apt-get >/dev/null 2>&1; then
+              install_with_apt postgresql-client
             fi
           fi
 
           if ! command -v nc >/dev/null 2>&1; then
-            if command -v yum >/dev/null 2>&1; then install_with_yum nmap-ncat
-            elif command -v apt-get >/dev/null 2>&1; then install_with_apt netcat-openbsd
+            if command -v yum >/dev/null 2>&1; then
+              install_with_yum nmap-ncat
+            elif command -v apt-get >/dev/null 2>&1; then
+              install_with_apt netcat-openbsd
             fi
           fi
 
           if ! command -v session-manager-plugin >/dev/null 2>&1; then
-            if command -v yum >/dev/null 2>&1; then install_with_yum session-manager-plugin
-            elif command -v apt-get >/dev/null 2>&1; then install_with_apt session-manager-plugin
+            if command -v yum >/dev/null 2>&1; then
+              install_with_yum session-manager-plugin
+            elif command -v apt-get >/dev/null 2>&1; then
+              install_with_apt session-manager-plugin
             fi
           fi
 
           command -v psql >/dev/null 2>&1 || { echo "psql is required"; exit 1; }
-          command -v nc   >/dev/null 2>&1 || { echo "nc is required"; exit 1; }
+          command -v nc >/dev/null 2>&1 || { echo "nc is required"; exit 1; }
           command -v session-manager-plugin >/dev/null 2>&1 || { echo "session-manager-plugin is required"; exit 1; }
 
       - name: Load DB admin credentials from Secrets Manager (source of truth)
@@ -72,17 +81,8 @@ jobs:
             --query SecretString \
             --output text)"
 
-          DB_ADMIN_USER="$(python3 - <<'PY'
-import json, os
-print(json.loads(os.environ["SECRET_JSON"])["username"])
-PY
-          )"
-
-          DB_ADMIN_PASSWORD="$(python3 - <<'PY'
-import json, os
-print(json.loads(os.environ["SECRET_JSON"])["password"])
-PY
-          )"
+          DB_ADMIN_USER="$(python3 -c 'import json,os; print(json.loads(os.environ["SECRET_JSON"])["username"])')"
+          DB_ADMIN_PASSWORD="$(python3 -c 'import json,os; print(json.loads(os.environ["SECRET_JSON"])["password"])')"
 
           {
             echo "DB_ADMIN_USER=$DB_ADMIN_USER"
@@ -101,11 +101,10 @@ PY
           set -euo pipefail
           [[ -n "${SSM_TARGET_TAG_NAME:-}" ]] || { echo "SSM_TARGET_TAG_NAME missing (Environment secret)"; exit 1; }
 
-          INSTANCE_ID=$(aws ec2 describe-instances \
-            --filters "Name=tag:Name,Values=${SSM_TARGET_TAG_NAME}" \
-                      "Name=instance-state-name,Values=running" \
+          INSTANCE_ID="$(aws ec2 describe-instances \
+            --filters "Name=tag:Name,Values=${SSM_TARGET_TAG_NAME}" "Name=instance-state-name,Values=running" \
             --query "Reservations[].Instances[].InstanceId | [0]" \
-            --output text)
+            --output text)"
 
           if [[ -z "$INSTANCE_ID" || "$INSTANCE_ID" == "None" ]]; then
             echo "No running instance found with Name tag: ${SSM_TARGET_TAG_NAME}"
@@ -144,12 +143,13 @@ PY
           SSM_PID=$!
           echo "SSM_PID=$SSM_PID" >> "$GITHUB_ENV"
 
-          for i in {1..30}; do
+          for _ in {1..30}; do
             nc -z 127.0.0.1 65432 && break
             sleep 1
           done
 
-          nc -z 127.0.0.1 65432 || { tail -n 120 ssm.log || true; exit 1; }
+          nc -z 127.0.0.1 65432 || { echo "Tunnel failed"; tail -n 120 ssm.log || true; exit 1; }
+          echo "Tunnel established."
 
       - name: Install Ansible PostgreSQL collection
         shell: bash
