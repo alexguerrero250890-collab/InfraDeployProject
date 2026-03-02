@@ -3,6 +3,7 @@
 *.tfstate.backup
 *.plan
 .terraform/
+*/.terraform.lock.hcl
 
 
 # Crash logs
@@ -14,6 +15,7 @@ crash.log
 *.env
 *.rpm
 *.swp
+*.swo
 
 # Editor folders (opcional)
 .vscode/
