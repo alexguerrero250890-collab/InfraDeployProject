@@ -38,26 +38,20 @@ jobs:
           install_with_apt() { sudo apt-get update -y && sudo apt-get install -y "$@" || true; }
 
           if ! command -v psql >/dev/null 2>&1; then
-            if command -v yum >/dev/null 2>&1; then
-              install_with_yum postgresql
-            elif command -v apt-get >/dev/null 2>&1; then
-              install_with_apt postgresql-client
+            if command -v yum >/dev/null 2>&1; then install_with_yum postgresql
+            elif command -v apt-get >/dev/null 2>&1; then install_with_apt postgresql-client
             fi
           fi
 
           if ! command -v nc >/dev/null 2>&1; then
-            if command -v yum >/dev/null 2>&1; then
-              install_with_yum nmap-ncat
-            elif command -v apt-get >/dev/null 2>&1; then
-              install_with_apt netcat-openbsd
+            if command -v yum >/dev/null 2>&1; then install_with_yum nmap-ncat
+            elif command -v apt-get >/dev/null 2>&1; then install_with_apt netcat-openbsd
             fi
           fi
 
           if ! command -v session-manager-plugin >/dev/null 2>&1; then
-            if command -v yum >/dev/null 2>&1; then
-              install_with_yum session-manager-plugin
-            elif command -v apt-get >/dev/null 2>&1; then
-              install_with_apt session-manager-plugin
+            if command -v yum >/dev/null 2>&1; then install_with_yum session-manager-plugin
+            elif command -v apt-get >/dev/null 2>&1; then install_with_apt session-manager-plugin
             fi
           fi
 
@@ -73,39 +67,31 @@ jobs:
           set -euo pipefail
           [[ -n "${PROXY_SECRET_ARN:-}" ]] || { echo "PROXY_SECRET_ARN missing (Environment secret)"; exit 1; }
 
-          SECRET_JSON=$(aws secretsmanager get-secret-value \
+          export SECRET_JSON="$(aws secretsmanager get-secret-value \
             --secret-id "$PROXY_SECRET_ARN" \
             --query SecretString \
-            --output text)
+            --output text)"
 
-          # Parse JSON safely (no jq dependency)
-          DB_ADMIN_USER=$(python3 - <<'PY'
+          DB_ADMIN_USER="$(python3 - <<'PY'
 import json, os
-s=os.environ["SECRET_JSON"]
-print(json.loads(s)["username"])
+print(json.loads(os.environ["SECRET_JSON"])["username"])
 PY
-          )
+          )"
 
-          DB_ADMIN_PASSWORD=$(python3 - <<'PY'
+          DB_ADMIN_PASSWORD="$(python3 - <<'PY'
 import json, os
-s=os.environ["SECRET_JSON"]
-print(json.loads(s)["password"])
+print(json.loads(os.environ["SECRET_JSON"])["password"])
 PY
-          )
+          )"
 
-          # Export for next steps
           {
             echo "DB_ADMIN_USER=$DB_ADMIN_USER"
             echo "DB_ADMIN_PASSWORD=$DB_ADMIN_PASSWORD"
           } >> "$GITHUB_ENV"
 
-          # Fingerprint (no leaks)
           echo "Loaded DB admin user from Secrets Manager: $DB_ADMIN_USER"
           echo "DB_ADMIN_PASSWORD length: ${#DB_ADMIN_PASSWORD}"
           echo -n "$DB_ADMIN_PASSWORD" | sha256sum | awk '{print "DB_ADMIN_PASSWORD sha256: "$1}'
-
-        env:
-          SECRET_JSON: ${{ env.SECRET_JSON }}
 
       - name: Resolve EC2 instance (SSM target by Name tag)
         shell: bash
@@ -113,7 +99,6 @@ PY
           SSM_TARGET_TAG_NAME: ${{ secrets.SSM_TARGET_TAG_NAME }}
         run: |
           set -euo pipefail
-
           [[ -n "${SSM_TARGET_TAG_NAME:-}" ]] || { echo "SSM_TARGET_TAG_NAME missing (Environment secret)"; exit 1; }
 
           INSTANCE_ID=$(aws ec2 describe-instances \
@@ -140,7 +125,6 @@ PY
           PROXY_ENDPOINT: ${{ secrets.PROXY_ENDPOINT }}
         run: |
           set -euo pipefail
-
           [[ -n "${PROXY_ENDPOINT:-}" ]] || { echo "PROXY_ENDPOINT missing (Environment secret)"; exit 1; }
           [[ -n "${INSTANCE_ID:-}" ]] || { echo "INSTANCE_ID not set"; exit 1; }
 
@@ -187,7 +171,6 @@ PY
           echo "DB_ADMIN_PASSWORD length: ${#DB_ADMIN_PASSWORD}"
           echo -n "$DB_ADMIN_PASSWORD" | sha256sum | awk '{print "DB_ADMIN_PASSWORD sha256: "$1}'
 
-          echo "Testing auth with psql (SELECT 1)..."
           PGPASSWORD="$DB_ADMIN_PASSWORD" psql \
             "host=127.0.0.1 port=65432 dbname=$DB_NAME user=$DB_ADMIN_USER sslmode=require" \
             -c "SELECT 1;"
