@@ -33,16 +33,24 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          clean: true
+
+      - name: Force clean workspace (self-hosted safety)
+        shell: bash
+        run: |
+          set -euo pipefail
+          # En self-hosted puede quedar basura entre runs.
+          # Esto borra TODO lo no trackeado (incluye .tf/.tfvars “fantasma”).
+          git reset --hard
+          git clean -ffdx
 
       - name: Prepare Terraform temp + plugin cache (avoid /tmp issues)
         run: |
           set -euo pipefail
-
-          # RUNNER_TEMP es una variable runtime (no requiere ${{ runner.* }})
           mkdir -p "${RUNNER_TEMP}/tf-tmp" "${RUNNER_TEMP}/terraform-plugin-cache"
           chmod 700 "${RUNNER_TEMP}/tf-tmp" "${RUNNER_TEMP}/terraform-plugin-cache"
-
-          # Exporta para los siguientes steps
           echo "TMPDIR=${RUNNER_TEMP}/tf-tmp" >> "$GITHUB_ENV"
           echo "TF_PLUGIN_CACHE_DIR=${RUNNER_TEMP}/terraform-plugin-cache" >> "$GITHUB_ENV"
 
@@ -58,6 +66,25 @@ jobs:
             fi
           fi
           command -v jq >/dev/null 2>&1 || { echo "jq is required"; exit 1; }
+
+      - name: Show ASG capacity from checked-out code (debug)
+        run: |
+          set -euo pipefail
+          echo "Repo SHA:"
+          git rev-parse HEAD
+          echo
+          echo "Listing *.tf and *.tfvars in environments/${{ inputs.environment }}:"
+          ls -la
+          echo
+          echo "Searching min_size / desired_capacity in this environment:"
+          grep -nE "min_size\s*=|desired_capacity\s*=" -n *.tf || true
+          echo
+          echo "Context around module autoscaling (if present):"
+          awk '
+            /module "autoscaling"/ {show=1}
+            show {print}
+            show && /^\}/ {exit}
+          ' main.tf || true
 
       - name: Terraform Init
         run: |
@@ -76,16 +103,16 @@ jobs:
           terraform plan -out=tfplan -input=false -lock-timeout=10m
           terraform show -json tfplan > tfplan.json
 
-      - name: Guardrail (prevent scale-down ASG to zero)
+      - name: Guardrail (prevent ASG scale-to-zero)
         run: |
           set -euo pipefail
 
-          # SOLO bloquea si el plan BAJA un ASG a 0:
+          # Bloquea SOLO si el plan BAJA un ASG a 0:
           # before > 0 AND after == 0 (min_size o desired_capacity)
           if jq -e '
             .resource_changes[]
             | select(.type == "aws_autoscaling_group")
-            | select(.change.after != null and .change.before != null)
+            | select(.change.before != null and .change.after != null)
             | .change as $c
             | (
                 (
@@ -97,8 +124,10 @@ jobs:
                 )
               )
           ' tfplan.json > /dev/null; then
-            echo "Guardrail triggered: plan would scale an ASG DOWN to 0 (min_size/desired_capacity). Aborting before apply."
-            echo "Tip: revisa variables del ASG o defaults del entorno; si quieres ahorro en dev, hazlo fuera del pipeline o con un toggle."
+            echo "Guardrail triggered: plan would scale ASG DOWN to 0."
+            echo "This should NOT happen if your code sets min_size/desired_capacity to >0."
+            echo "Likely cause on self-hosted: leftover untracked *.tf/*.tfvars in the workspace."
+            echo "We forced git clean -ffdx; if it still happens, inspect logs above (ASG snippet + file listing)."
             exit 1
           fi
 
@@ -122,7 +151,6 @@ jobs:
           SSM_TARGET_TAG_NAME: ${{ secrets.SSM_TARGET_TAG_NAME }}
         run: |
           set -euo pipefail
-
           [[ -n "${SSM_TARGET_TAG_NAME:-}" ]] || { echo "SSM_TARGET_TAG_NAME missing (Environment secret)"; exit 1; }
 
           echo "Waiting for a running instance with Name=${SSM_TARGET_TAG_NAME} ..."
@@ -142,7 +170,6 @@ jobs:
           done
 
           echo "Timed out waiting for running instance with Name=${SSM_TARGET_TAG_NAME}."
-          echo "This usually means your ASG desired/min is 0, or scaling hasn't created instances."
           exit 1
 
   db_bootstrap:
