@@ -1,0 +1,154 @@
+name: Deploy Infra + DB Bootstrap
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Target environment"
+        required: true
+        type: choice
+        options: [dev, staging, prod]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: terraform-${{ inputs.environment }}
+  cancel-in-progress: false
+
+jobs:
+  terraform_apply:
+    name: Terraform Plan + Apply (guardrails)
+    runs-on: self-hosted
+    environment: ${{ inputs.environment }}
+
+    env:
+      TF_IN_AUTOMATION: "true"
+      TF_PLUGIN_CACHE_DIR: ${{ runner.temp }}/terraform-plugin-cache
+      TMPDIR: ${{ runner.temp }}/tf-tmp
+
+    defaults:
+      run:
+        shell: bash
+        working-directory: environments/${{ inputs.environment }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Prepare Terraform temp + plugin cache
+        run: |
+          set -euo pipefail
+          mkdir -p "${RUNNER_TEMP}/tf-tmp" "${RUNNER_TEMP}/terraform-plugin-cache"
+          chmod 700 "${RUNNER_TEMP}/tf-tmp" "${RUNNER_TEMP}/terraform-plugin-cache"
+
+      - name: Ensure tools (jq)
+        run: |
+          set -euo pipefail
+          if ! command -v jq >/dev/null 2>&1; then
+            if command -v yum >/dev/null 2>&1; then
+              sudo yum -y install jq
+            elif command -v apt-get >/dev/null 2>&1; then
+              sudo apt-get update -y
+              sudo apt-get install -y jq
+            fi
+          fi
+          command -v jq >/dev/null 2>&1 || { echo "jq is required"; exit 1; }
+
+      - name: Terraform Init
+        run: |
+          set -euo pipefail
+          rm -rf .terraform .terraform.lock.hcl || true
+          terraform init -input=false -upgrade
+
+      - name: Terraform Validate
+        run: |
+          set -euo pipefail
+          terraform validate
+
+      - name: Terraform Plan
+        run: |
+          set -euo pipefail
+          terraform plan -out=tfplan -input=false -lock-timeout=10m
+          terraform show -json tfplan > tfplan.json
+
+      - name: Guardrail (prevent scale-down ASG to zero)
+        run: |
+          set -euo pipefail
+
+          # Guardrail SOLO si el plan está CAMBIANDO un ASG y lo baja a 0:
+          # before > 0  AND after == 0  (min_size o desired_capacity)
+          #
+          # Esto evita falsos positivos cuando:
+          # - el ASG ya está en 0 y el plan no lo está bajando "ahora"
+          # - otros recursos traen campos similares
+          if jq -e '
+            .resource_changes[]
+            | select(.type == "aws_autoscaling_group")
+            | select(.change.actions | index("update") or index("create") or index("replace"))
+            | .change as $c
+            | (
+                (
+                  ($c.before.min_size? // 0) > 0 and ($c.after.min_size? // 0) == 0
+                )
+                or
+                (
+                  ($c.before.desired_capacity? // 0) > 0 and ($c.after.desired_capacity? // 0) == 0
+                )
+              )
+          ' tfplan.json > /dev/null; then
+            echo "Guardrail triggered: plan would scale an ASG DOWN to 0 (min_size/desired_capacity). Aborting before apply."
+            echo "Tip: revisa variables del ASG o defaults del entorno; si quieres ahorro en dev, hazlo fuera del pipeline o con un toggle."
+            exit 1
+          fi
+
+          echo "Guardrail passed."
+
+      - name: Terraform Apply (from plan)
+        run: |
+          set -euo pipefail
+          terraform apply -auto-approve -input=false -lock-timeout=10m tfplan
+
+  wait_for_instance:
+    name: Wait for EC2 (SSM target)
+    needs: terraform_apply
+    runs-on: self-hosted
+    environment: ${{ inputs.environment }}
+
+    steps:
+      - name: Wait until an instance is running (by Name tag)
+        shell: bash
+        env:
+          SSM_TARGET_TAG_NAME: ${{ secrets.SSM_TARGET_TAG_NAME }}
+        run: |
+          set -euo pipefail
+
+          [[ -n "${SSM_TARGET_TAG_NAME:-}" ]] || { echo "SSM_TARGET_TAG_NAME missing (Environment secret)"; exit 1; }
+
+          echo "Waiting for a running instance with Name=${SSM_TARGET_TAG_NAME} ..."
+          for i in {1..60}; do
+            INSTANCE_ID=$(aws ec2 describe-instances \
+              --filters "Name=tag:Name,Values=${SSM_TARGET_TAG_NAME}" \
+                        "Name=instance-state-name,Values=running" \
+              --query "Reservations[].Instances[].InstanceId | [0]" \
+              --output text)
+
+            if [[ -n "$INSTANCE_ID" && "$INSTANCE_ID" != "None" ]]; then
+              echo "Found running instance: $INSTANCE_ID"
+              exit 0
+            fi
+
+            sleep 10
+          done
+
+          echo "Timed out waiting for running instance with Name=${SSM_TARGET_TAG_NAME}."
+          echo "This usually means your ASG desired/min is 0, or scaling hasn't created instances."
+          exit 1
+
+  db_bootstrap:
+    name: DB Bootstrap
+    needs: wait_for_instance
+    uses: ./.github/workflows/db-bootstrap.yml
+    with:
+      environment: ${{ inputs.environment }}
+    secrets: inherit
