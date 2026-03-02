@@ -7,10 +7,13 @@ on:
         description: "Target environment"
         required: true
         type: choice
-        options:
-          - dev
-          - staging
-          - prod
+        options: [dev, staging, prod]
+
+  workflow_call:
+    inputs:
+      environment:
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -20,27 +23,37 @@ jobs:
     name: Bootstrap PostgreSQL
     runs-on: self-hosted
     environment: ${{ inputs.environment }}
+    timeout-minutes: 30
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # --------------------------------------------------
-      # Ensure required tools exist on self-hosted runner
-      # --------------------------------------------------
-      - name: Ensure tools (aws, session-manager-plugin, ansible, jq, nc)
+      - name: Ensure tools (psql, nc, session-manager-plugin)
         shell: bash
         run: |
           set -euo pipefail
 
-          command -v aws >/dev/null 2>&1 || { echo "aws cli not found"; exit 1; }
-
-          # Best-effort installs (do not fail the job if install isn't possible)
           install_with_yum() { sudo yum -y install "$@" || true; }
           install_with_apt() { sudo apt-get update -y && sudo apt-get install -y "$@" || true; }
 
+          if ! command -v psql >/dev/null 2>&1; then
+            if command -v yum >/dev/null 2>&1; then
+              install_with_yum postgresql
+            elif command -v apt-get >/dev/null 2>&1; then
+              install_with_apt postgresql-client
+            fi
+          fi
+
+          if ! command -v nc >/dev/null 2>&1; then
+            if command -v yum >/dev/null 2>&1; then
+              install_with_yum nmap-ncat
+            elif command -v apt-get >/dev/null 2>&1; then
+              install_with_apt netcat-openbsd
+            fi
+          fi
+
           if ! command -v session-manager-plugin >/dev/null 2>&1; then
-            echo "session-manager-plugin not found. Attempting install..."
             if command -v yum >/dev/null 2>&1; then
               install_with_yum session-manager-plugin
             elif command -v apt-get >/dev/null 2>&1; then
@@ -48,108 +61,80 @@ jobs:
             fi
           fi
 
-          if ! command -v ansible-playbook >/dev/null 2>&1; then
-            echo "ansible not found. Attempting install..."
-            if command -v yum >/dev/null 2>&1; then
-              install_with_yum ansible
-            elif command -v apt-get >/dev/null 2>&1; then
-              install_with_apt ansible
-            fi
-          fi
-
-          if ! command -v jq >/dev/null 2>&1; then
-            echo "jq not found. Attempting install..."
-            if command -v yum >/dev/null 2>&1; then
-              install_with_yum jq
-            elif command -v apt-get >/dev/null 2>&1; then
-              install_with_apt jq
-            fi
-          fi
-
-          if ! command -v nc >/dev/null 2>&1; then
-            echo "nc not found. Attempting install..."
-            if command -v yum >/dev/null 2>&1; then
-              install_with_yum nc
-            elif command -v apt-get >/dev/null 2>&1; then
-              install_with_apt netcat-openbsd
-            fi
-          fi
-
-          # Final checks (fail if critical ones still missing)
+          command -v psql >/dev/null 2>&1 || { echo "psql is required"; exit 1; }
+          command -v nc   >/dev/null 2>&1 || { echo "nc is required"; exit 1; }
           command -v session-manager-plugin >/dev/null 2>&1 || { echo "session-manager-plugin is required"; exit 1; }
-          command -v ansible-playbook >/dev/null 2>&1 || { echo "ansible-playbook is required"; exit 1; }
 
-      # --------------------------------------------------
-      # Resolve EC2 instance dynamically by Environment tag
-      # --------------------------------------------------
-      - name: Resolve EC2 instance
-        id: resolve
+      - name: Resolve EC2 instance (SSM target by Name tag)
         shell: bash
+        env:
+          SSM_TARGET_TAG_NAME: ${{ secrets.SSM_TARGET_TAG_NAME }}
         run: |
           set -euo pipefail
 
-          INSTANCE_ID="$(aws ec2 describe-instances \
-            --filters "Name=tag:Environment,Values=${{ inputs.environment }}" \
+          [[ -n "${SSM_TARGET_TAG_NAME:-}" ]] || { echo "SSM_TARGET_TAG_NAME missing (Environment secret)"; exit 1; }
+
+          INSTANCE_ID=$(aws ec2 describe-instances \
+            --filters "Name=tag:Name,Values=${SSM_TARGET_TAG_NAME}" \
                       "Name=instance-state-name,Values=running" \
             --query "Reservations[].Instances[].InstanceId | [0]" \
-            --output text)"
+            --output text)
 
-          if [[ -z "${INSTANCE_ID}" || "${INSTANCE_ID}" == "None" ]]; then
-            echo "No running instance found for environment: ${{ inputs.environment }}"
+          if [[ -z "$INSTANCE_ID" || "$INSTANCE_ID" == "None" ]]; then
+            echo "No running instance found with Name tag: ${SSM_TARGET_TAG_NAME}"
+            echo "Debug: listing running instances Name/Environment tags:"
+            aws ec2 describe-instances \
+              --filters "Name=instance-state-name,Values=running" \
+              --query "Reservations[].Instances[].{Id:InstanceId,Name:Tags[?Key=='Name']|[0].Value,Env:Tags[?Key=='Environment']|[0].Value}" \
+              --output table || true
             exit 1
           fi
 
-          echo "INSTANCE_ID=${INSTANCE_ID}" >> "$GITHUB_ENV"
-          echo "Using instance: ${INSTANCE_ID}"
+          echo "INSTANCE_ID=$INSTANCE_ID" >> "$GITHUB_ENV"
+          echo "Using instance: $INSTANCE_ID"
 
-      # --------------------------------------------------
-      # Start SSM tunnel to RDS Proxy (local 65432 -> remote 5432)
-      # --------------------------------------------------
-      - name: Start SSM tunnel
-        id: tunnel
+      - name: Start SSM tunnel (local 65432 -> proxy 5432)
         shell: bash
+        env:
+          PROXY_ENDPOINT: ${{ secrets.PROXY_ENDPOINT }}
         run: |
           set -euo pipefail
 
-          LOCAL_PORT="65432"
-          REMOTE_PORT="5432"
+          [[ -n "${PROXY_ENDPOINT:-}" ]] || { echo "PROXY_ENDPOINT missing (Environment secret)"; exit 1; }
+          [[ -n "${INSTANCE_ID:-}" ]] || { echo "INSTANCE_ID not set"; exit 1; }
 
-          # Start port-forward session in background
+          cleanup() {
+            if [[ -n "${SSM_PID:-}" ]]; then
+              echo "Stopping SSM tunnel PID=${SSM_PID}"
+              kill "${SSM_PID}" >/dev/null 2>&1 || true
+            fi
+          }
+          trap cleanup EXIT
+
           aws ssm start-session \
-            --target "${{ env.INSTANCE_ID }}" \
-            --document-name "AWS-StartPortForwardingSessionToRemoteHost" \
-            --parameters "host=${{ secrets.DB_HOST }},portNumber=${REMOTE_PORT},localPortNumber=${LOCAL_PORT}" \
+            --target "$INSTANCE_ID" \
+            --document-name AWS-StartPortForwardingSessionToRemoteHost \
+            --parameters "host=${PROXY_ENDPOINT},portNumber=5432,localPortNumber=65432" \
             > ssm.log 2>&1 &
 
-          SSM_PID="$!"
-          echo "SSM_PID=${SSM_PID}" >> "$GITHUB_ENV"
-          echo "Started SSM tunnel PID=${SSM_PID}"
+          SSM_PID=$!
+          echo "SSM_PID=$SSM_PID" >> "$GITHUB_ENV"
+          echo "Started SSM tunnel PID=$SSM_PID"
 
-          # Wait until local port is listening
           for i in {1..30}; do
-            if nc -z 127.0.0.1 "${LOCAL_PORT}" >/dev/null 2>&1; then
-              echo "Tunnel is up on 127.0.0.1:${LOCAL_PORT}"
-              exit 0
-            fi
+            nc -z 127.0.0.1 65432 && break
             sleep 1
           done
 
-          echo "Tunnel did not come up in time. ssm.log:"
-          tail -n 200 ssm.log || true
-          exit 1
+          nc -z 127.0.0.1 65432 || { echo "Tunnel failed"; tail -n 120 ssm.log || true; exit 1; }
+          echo "Tunnel established."
 
-      # --------------------------------------------------
-      # Install Ansible collection (safe to repeat)
-      # --------------------------------------------------
-      - name: Install PostgreSQL collection
+      - name: Install Ansible PostgreSQL collection
         shell: bash
         run: |
           set -euo pipefail
           ansible-galaxy collection install community.postgresql
 
-      # --------------------------------------------------
-      # Execute Playbook
-      # --------------------------------------------------
       - name: Run PostgreSQL bootstrap
         shell: bash
         env:
@@ -160,7 +145,23 @@ jobs:
         run: |
           set -euo pipefail
 
-          ansible-playbook ansible/playbooks/postgres_bootstrap.yml \
+          echo "Environment input: ${{ inputs.environment }}"
+          echo "DB_NAME=$DB_NAME"
+          echo "DB_ADMIN_USER=$DB_ADMIN_USER"
+
+          echo "DB_ADMIN_PASSWORD length: ${#DB_ADMIN_PASSWORD}"
+          echo -n "$DB_ADMIN_PASSWORD" | sha256sum | awk '{print "DB_ADMIN_PASSWORD sha256: "$1}'
+
+          echo "Testing auth with psql (SELECT 1)..."
+          PGPASSWORD="$DB_ADMIN_PASSWORD" psql \
+            "host=127.0.0.1 port=65432 dbname=$DB_NAME user=$DB_ADMIN_USER sslmode=require" \
+            -c "SELECT 1;"
+
+          PLAYBOOK="${GITHUB_WORKSPACE}/ansible/playbooks/postgres_bootstrap.yml"
+          echo "Using playbook: $PLAYBOOK"
+          test -f "$PLAYBOOK" || { echo "Playbook not found"; exit 1; }
+
+          ansible-playbook "$PLAYBOOK" \
             -e "db_host=127.0.0.1" \
             -e "db_port=65432" \
             -e "db_name=${DB_NAME}" \
@@ -169,9 +170,6 @@ jobs:
             -e "enable_roles=true" \
             -e "pg_roles=[{'name':'app_user','password':'${APP_USER_PASSWORD}','flags':'LOGIN'}]"
 
-      # --------------------------------------------------
-      # Cleanup
-      # --------------------------------------------------
       - name: Stop SSM tunnel
         if: always()
         shell: bash

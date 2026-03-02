@@ -24,8 +24,6 @@ jobs:
 
     env:
       TF_IN_AUTOMATION: "true"
-      TF_PLUGIN_CACHE_DIR: ${{ runner.temp }}/terraform-plugin-cache
-      TMPDIR: ${{ runner.temp }}/tf-tmp
 
     defaults:
       run:
@@ -36,11 +34,17 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Prepare Terraform temp + plugin cache
+      - name: Prepare Terraform temp + plugin cache (avoid /tmp issues)
         run: |
           set -euo pipefail
+
+          # RUNNER_TEMP es una variable runtime (no requiere ${{ runner.* }})
           mkdir -p "${RUNNER_TEMP}/tf-tmp" "${RUNNER_TEMP}/terraform-plugin-cache"
           chmod 700 "${RUNNER_TEMP}/tf-tmp" "${RUNNER_TEMP}/terraform-plugin-cache"
+
+          # Exporta para los siguientes steps
+          echo "TMPDIR=${RUNNER_TEMP}/tf-tmp" >> "$GITHUB_ENV"
+          echo "TF_PLUGIN_CACHE_DIR=${RUNNER_TEMP}/terraform-plugin-cache" >> "$GITHUB_ENV"
 
       - name: Ensure tools (jq)
         run: |
@@ -76,16 +80,12 @@ jobs:
         run: |
           set -euo pipefail
 
-          # Guardrail SOLO si el plan está CAMBIANDO un ASG y lo baja a 0:
-          # before > 0  AND after == 0  (min_size o desired_capacity)
-          #
-          # Esto evita falsos positivos cuando:
-          # - el ASG ya está en 0 y el plan no lo está bajando "ahora"
-          # - otros recursos traen campos similares
+          # SOLO bloquea si el plan BAJA un ASG a 0:
+          # before > 0 AND after == 0 (min_size o desired_capacity)
           if jq -e '
             .resource_changes[]
             | select(.type == "aws_autoscaling_group")
-            | select(.change.actions | index("update") or index("create") or index("replace"))
+            | select(.change.after != null and .change.before != null)
             | .change as $c
             | (
                 (
