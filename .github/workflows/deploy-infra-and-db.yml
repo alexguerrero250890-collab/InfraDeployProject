@@ -73,7 +73,7 @@ jobs:
           fi
           command -v jq >/dev/null 2>&1 || { echo "jq is required"; exit 1; }
 
-      - name: Debug (runner): branch/SHA + autoscaling values
+      - name: "Debug (runner): branch/SHA + autoscaling values"
         shell: bash
         run: |
           set -euo pipefail
