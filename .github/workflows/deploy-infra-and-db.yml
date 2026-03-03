@@ -7,7 +7,10 @@ on:
         description: "Target environment"
         required: true
         type: choice
-        options: [dev, staging, prod]
+        options:
+          - dev
+          - staging
+          - prod
 
 permissions:
   contents: read
@@ -48,6 +51,7 @@ jobs:
           git clean -ffdx
 
       - name: Prepare Terraform temp + plugin cache (avoid /tmp issues)
+        shell: bash
         run: |
           set -euo pipefail
           mkdir -p "${RUNNER_TEMP}/tf-tmp" "${RUNNER_TEMP}/terraform-plugin-cache"
@@ -56,6 +60,7 @@ jobs:
           echo "TF_PLUGIN_CACHE_DIR=${RUNNER_TEMP}/terraform-plugin-cache" >> "$GITHUB_ENV"
 
       - name: Ensure tools (jq)
+        shell: bash
         run: |
           set -euo pipefail
           if ! command -v jq >/dev/null 2>&1; then
@@ -72,8 +77,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          echo "GITHUB_REF=$GITHUB_REF"
-          echo "GITHUB_SHA=$GITHUB_SHA"
+          echo "GITHUB_REF=${GITHUB_REF}"
+          echo "GITHUB_SHA=${GITHUB_SHA}"
           echo "git rev-parse HEAD:"
           git rev-parse HEAD
 
@@ -99,23 +104,27 @@ jobs:
           env | grep -E "^TF_VAR_(min_size|desired_capacity|max_size)" || true
 
       - name: Terraform Init
+        shell: bash
         run: |
           set -euo pipefail
           rm -rf .terraform .terraform.lock.hcl || true
           terraform init -input=false -upgrade
 
       - name: Terraform Validate
+        shell: bash
         run: |
           set -euo pipefail
           terraform validate
 
       - name: Terraform Plan
+        shell: bash
         run: |
           set -euo pipefail
           terraform plan -out=tfplan -input=false -lock-timeout=10m
           terraform show -json tfplan > tfplan.json
 
       - name: Guardrail (prevent ASG scale-to-zero)
+        shell: bash
         run: |
           set -euo pipefail
 
@@ -125,15 +134,11 @@ jobs:
             | select(.type == "aws_autoscaling_group")
             | select(.address | test("module\\.autoscaling"))
             | select(.change.before != null and .change.after != null)
-            | [
-                " - " + .address,
-                "    min_size: " + ((.change.before.min_size // null) | tostring) + " -> " + ((.change.after.min_size // null) | tostring),
-                "    desired_capacity: " + ((.change.before.desired_capacity // null) | tostring) + " -> " + ((.change.after.desired_capacity // null) | tostring)
-              ]
-            | .[]
+            | " - " + .address
+              + "\n    min_size: " + ((.change.before.min_size // null) | tostring) + " -> " + ((.change.after.min_size // null) | tostring)
+              + "\n    desired_capacity: " + ((.change.before.desired_capacity // null) | tostring) + " -> " + ((.change.after.desired_capacity // null) | tostring)
           ' tfplan.json || true
 
-          # Block only if OUR ASG (module.autoscaling) scales down to 0 from >0
           if jq -e '
             .resource_changes[]
             | select(.type == "aws_autoscaling_group")
@@ -148,19 +153,20 @@ jobs:
           ' tfplan.json > /dev/null; then
             echo
             echo "Guardrail triggered: module.autoscaling would scale ASG DOWN to 0. Aborting."
-            echo "Fix: ensure min_size/desired_capacity/max_size in your autoscaling module inputs are >0."
             exit 1
           fi
 
           echo "Guardrail passed."
 
       - name: Terraform Apply (from plan)
+        shell: bash
         run: |
           set -euo pipefail
           terraform apply -auto-approve -input=false -lock-timeout=10m tfplan
 
       - name: Export outputs for downstream jobs
         id: export_outputs
+        shell: bash
         run: |
           set -euo pipefail
           ASG_NAME="$(terraform output -raw asg_name)"
