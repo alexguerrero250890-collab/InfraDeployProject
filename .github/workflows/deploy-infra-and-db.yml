@@ -135,7 +135,7 @@ jobs:
           terraform plan -out=tfplan -input=false -lock-timeout=10m
           terraform show -json tfplan > tfplan.json
 
-      - name: Debug: show ASG change from plan (safe)
+      - name: "Debug: show ASG change from plan (safe)"
         shell: bash
         run: |
           set -euo pipefail
@@ -152,7 +152,7 @@ jobs:
             | .[]
           ' tfplan.json || true
 
-      - name: Guardrail (prevent ASG scale-to-zero)
+      - name: "Guardrail (prevent ASG scale-to-zero)"
         run: |
           set -euo pipefail
 
