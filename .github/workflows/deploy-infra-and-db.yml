@@ -68,6 +68,36 @@ jobs:
           fi
           command -v jq >/dev/null 2>&1 || { echo "jq is required"; exit 1; }
 
+      - name: Debug (runner): branch/SHA + autoscaling values
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "GITHUB_REF=$GITHUB_REF"
+          echo "GITHUB_SHA=$GITHUB_SHA"
+          echo "git rev-parse HEAD:"
+          git rev-parse HEAD
+
+          echo
+          echo "PWD=$(pwd)"
+          echo "Listing current env dir:"
+          ls -la
+
+          echo
+          echo "Autoscaling block in main.tf (this environment):"
+          awk '
+            /module "autoscaling"/ {show=1}
+            show {print}
+            show && /^\}/ {exit}
+          ' main.tf || true
+
+          echo
+          echo "Any tfvars/auto.tfvars in this env dir?"
+          ls -la *.tfvars *.auto.tfvars 2>/dev/null || true
+
+          echo
+          echo "Any TF_VAR_* overrides set?"
+          env | grep -E "^TF_VAR_(min_size|desired_capacity|max_size)" || true
+
       - name: Terraform Init
         run: |
           set -euo pipefail
