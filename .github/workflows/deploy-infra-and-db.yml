@@ -125,7 +125,12 @@ jobs:
             | select(.type == "aws_autoscaling_group")
             | select(.address | test("module\\.autoscaling"))
             | select(.change.before != null and .change.after != null)
-            | " - \(.address)\n    min_size: \(.change.before.min_size // "null") -> \(.change.after.min_size // "null")\n    desired_capacity: \(.change.before.desired_capacity // "null") -> \(.change.after.desired_capacity // "null")"
+            | [
+                " - " + .address,
+                "    min_size: " + ((.change.before.min_size // null) | tostring) + " -> " + ((.change.after.min_size // null) | tostring),
+                "    desired_capacity: " + ((.change.before.desired_capacity // null) | tostring) + " -> " + ((.change.after.desired_capacity // null) | tostring)
+              ]
+            | .[]
           ' tfplan.json || true
 
           # Block only if OUR ASG (module.autoscaling) scales down to 0 from >0
@@ -136,13 +141,9 @@ jobs:
             | select(.change.before != null and .change.after != null)
             | .change as $c
             | (
-                (
-                  ($c.before.min_size? // 0) > 0 and ($c.after.min_size? // 0) == 0
-                )
+                (($c.before.min_size? // 0) > 0 and ($c.after.min_size? // 0) == 0)
                 or
-                (
-                  ($c.before.desired_capacity? // 0) > 0 and ($c.after.desired_capacity? // 0) == 0
-                )
+                (($c.before.desired_capacity? // 0) > 0 and ($c.after.desired_capacity? // 0) == 0)
               )
           ' tfplan.json > /dev/null; then
             echo
