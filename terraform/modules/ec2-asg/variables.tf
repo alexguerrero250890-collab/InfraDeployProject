@@ -31,6 +31,11 @@ variable "min_size" {
   type        = number
 }
 
+variable "max_size" {
+  description = "Maximum number of instances in the ASG"
+  type        = number
+}
+
 variable "desired_capacity" {
   description = "Desired number of instances in the ASG"
   type        = number
