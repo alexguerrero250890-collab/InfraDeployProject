@@ -100,20 +100,3 @@ variable "environment" {
     error_message = "environment must be one of: dev, staging, prod."
   }
 }
-
-# ===============================
-# Cross-field validation for ASG
-# ===============================
-variable "asg_capacity_validation" {
-  description = "Internal validation helper (do not set)"
-  type        = bool
-  default     = true
-
-  validation {
-    condition = (
-      var.asg_min_size <= var.asg_desired_capacity &&
-      var.asg_desired_capacity <= var.asg_max_size
-    )
-    error_message = "ASG sizing invalid: must satisfy asg_min_size <= asg_desired_capacity <= asg_max_size."
-  }
-}
