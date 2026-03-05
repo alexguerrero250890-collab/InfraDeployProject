@@ -22,6 +22,42 @@ variable "ami_id" {
   default     = "ami-0b46816ffa1234887"
 }
 
+# ===============================
+# ASG sizing (dev defaults)
+# ===============================
+variable "asg_min_size" {
+  description = "Minimum number of instances in the Auto Scaling Group"
+  type        = number
+  default     = 1
+
+  validation {
+    condition     = var.asg_min_size >= 0
+    error_message = "asg_min_size must be >= 0."
+  }
+}
+
+variable "asg_desired_capacity" {
+  description = "Desired number of instances in the Auto Scaling Group"
+  type        = number
+  default     = 1
+
+  validation {
+    condition     = var.asg_desired_capacity >= 0
+    error_message = "asg_desired_capacity must be >= 0."
+  }
+}
+
+variable "asg_max_size" {
+  description = "Maximum number of instances in the Auto Scaling Group"
+  type        = number
+  default     = 4
+
+  validation {
+    condition     = var.asg_max_size >= 1
+    error_message = "asg_max_size must be >= 1."
+  }
+}
+
 # PostgreSQL variables
 variable "db_name" {
   type        = string
@@ -50,7 +86,9 @@ variable "db_allocated_storage" {
 }
 
 variable "db_multi_az" {
-  type = bool
+  type        = bool
+  description = "Enable Multi-AZ for RDS"
+  default     = false
 }
 
 variable "environment" {
@@ -63,4 +101,19 @@ variable "environment" {
   }
 }
 
+# ===============================
+# Cross-field validation for ASG
+# ===============================
+variable "asg_capacity_validation" {
+  description = "Internal validation helper (do not set)"
+  type        = bool
+  default     = true
 
+  validation {
+    condition = (
+      var.asg_min_size <= var.asg_desired_capacity &&
+      var.asg_desired_capacity <= var.asg_max_size
+    )
+    error_message = "ASG sizing invalid: must satisfy asg_min_size <= asg_desired_capacity <= asg_max_size."
+  }
+}
