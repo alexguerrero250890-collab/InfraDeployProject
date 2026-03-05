@@ -95,8 +95,8 @@ module "autoscaling" {
   alb_target_group_arn = module.alb.target_group_arn
   alb_sg_id            = module.alb.alb_sg_id
 
-  min_size         = 2
-  desired_capacity = 2
+  min_size         = 1
+  desired_capacity = 4
 }
 
 # ===============================

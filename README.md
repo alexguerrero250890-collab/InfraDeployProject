@@ -121,6 +121,40 @@ This project demonstrates:
 
 ---
 
+## Key DevOps Capabilities Demonstrated
+
+- Infrastructure as Code (Terraform modular architecture)
+- Multi-environment deployment strategy
+- CI/CD for infrastructure
+- Guardrails preventing destructive operations
+- Secure secret handling
+- No-SSH production model (SSM only)
+- Remote state locking
+- Automated DB bootstrap
+- Environment-level isolation
+
+
+
+               Route53 (DNS)
+                     |
+                     v
+           Application Load Balancer (HTTPS)
+                     |
+                     v
+          Auto Scaling Group (EC2 instances)
+                     |
+                     v
+                RDS Proxy
+                     |
+                     v
+            RDS PostgreSQL (Multi-AZ)
+
+        Terraform state: S3 + DynamoDB lock
+        CI/CD: GitHub Actions
+        Secrets: AWS Secrets Manager
+
+
+
 ## Author
 Javier Guerrero
 
