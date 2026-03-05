@@ -96,7 +96,8 @@ module "autoscaling" {
   alb_sg_id            = module.alb.alb_sg_id
 
   min_size         = 1
-  desired_capacity = 4
+  desired_capacity = 1
+  max_size         = 4
 }
 
 # ===============================
