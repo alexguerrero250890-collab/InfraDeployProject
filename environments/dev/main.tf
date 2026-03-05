@@ -95,9 +95,10 @@ module "autoscaling" {
   alb_target_group_arn = module.alb.target_group_arn
   alb_sg_id            = module.alb.alb_sg_id
 
-  min_size         = 1
-  desired_capacity = 1
-  max_size         = 4
+  min_size         = var.asg_min_size
+  desired_capacity = var.asg_desired_capacity
+  max_size         = var.asg_max_size
+
 }
 
 # ===============================
@@ -140,4 +141,3 @@ resource "aws_route53_record" "alb_dev" {
     evaluate_target_health = true
   }
 }
-
