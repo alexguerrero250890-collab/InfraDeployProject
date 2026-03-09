@@ -58,6 +58,8 @@ resource "aws_db_instance" "this" {
 
   multi_az = var.multi_az
 
+  skip_final_snapshot = true
+
   tags = {
     Name        = "${var.project_name}-${var.environment}-db"
     Environment = var.environment

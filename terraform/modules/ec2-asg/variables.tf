@@ -34,7 +34,7 @@ variable "alb_sg_id" {
 variable "min_size" {
   description = "Minimum number of instances in the ASG"
   type        = number
-  default     = 0
+  default     = 1
 
   validation {
     condition     = var.min_size >= 0
@@ -45,7 +45,7 @@ variable "min_size" {
 variable "desired_capacity" {
   description = "Desired number of instances in the ASG"
   type        = number
-  default     = 0
+  default     = 1
 
   validation {
     condition     = var.desired_capacity >= 0

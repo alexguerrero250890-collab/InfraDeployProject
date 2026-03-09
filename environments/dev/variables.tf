@@ -28,7 +28,7 @@ variable "ami_id" {
 variable "asg_min_size" {
   description = "Minimum number of instances in the Auto Scaling Group"
   type        = number
-  default     = 0
+  default     = 1
 
   validation {
     condition     = var.asg_min_size >= 0
@@ -39,7 +39,7 @@ variable "asg_min_size" {
 variable "asg_desired_capacity" {
   description = "Desired number of instances in the Auto Scaling Group"
   type        = number
-  default     = 0
+  default     = 1
 
   validation {
     condition     = var.asg_desired_capacity >= 0
