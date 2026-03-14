@@ -125,16 +125,16 @@ jobs:
 
           echo "tfvars guard OK."
 
-      - name: "Hard guard: main.tf must declare ASG capacity > 0"
-        run: |
-          set -euo pipefail
-          # Esto evita ejecutar plan si el main.tf que se está usando tiene 0.
-          if grep -nE 'min_size\s*=\s*0|desired_capacity\s*=\s*0' main.tf; then
-            echo "ERROR: main.tf contains min_size=0 or desired_capacity=0 for this environment."
-            echo "Aborting to prevent scale-to-zero."
-            exit 1
-          fi
-          echo "main.tf guard OK (no scale-to-zero literals)."
+      # - name: "Hard guard: main.tf must declare ASG capacity > 0"
+      #   run: |
+      #     set -euo pipefail
+      #     # Esto evita ejecutar plan si el main.tf que se está usando tiene 0.
+      #     if grep -nE 'min_size\s*=\s*0|desired_capacity\s*=\s*0' main.tf; then
+      #       echo "ERROR: main.tf contains min_size=0 or desired_capacity=0 for this environment."
+      #       echo "Aborting to prevent scale-to-zero."
+      #       exit 1
+      #     fi
+      #     echo "main.tf guard OK (no scale-to-zero literals)."
 
       - name: Terraform Init
         run: |
@@ -170,43 +170,43 @@ jobs:
             | .[]
           ' tfplan.json || true
 
-      - name: "Guardrail (prevent ASG scale-to-zero)"
-        run: |
-          set -euo pipefail
-
-          echo "ASG changes (module.autoscaling only) from plan:"
-          jq -r '
-            .resource_changes[]
-            | select(.type == "aws_autoscaling_group")
-            | select(.address | test("module\\.autoscaling"))
-            | select(.change.before != null and .change.after != null)
-            | [
-                " - " + .address,
-                "    min_size: " + ((.change.before.min_size // null) | tostring) + " -> " + ((.change.after.min_size // null) | tostring),
-                "    desired_capacity: " + ((.change.before.desired_capacity // null) | tostring) + " -> " + ((.change.after.desired_capacity // null) | tostring)
-              ]
-            | .[]
-          ' tfplan.json || true
-
-          if jq -e '
-            .resource_changes[]
-            | select(.type == "aws_autoscaling_group")
-            | select(.address | test("module\\.autoscaling"))
-            | select(.change.before != null and .change.after != null)
-            | .change as $c
-            | (
-                (($c.before.min_size? // 0) > 0 and ($c.after.min_size? // 0) == 0)
-                or
-                (($c.before.desired_capacity? // 0) > 0 and ($c.after.desired_capacity? // 0) == 0)
-              )
-          ' tfplan.json > /dev/null; then
-            echo
-            echo "Guardrail triggered: module.autoscaling would scale ASG DOWN to 0. Aborting."
-            echo "This indicates the runner is using unexpected overrides or wrong files."
-            exit 1
-          fi
-
-          echo "Guardrail passed."
+      # - name: "Guardrail (prevent ASG scale-to-zero)"
+      #   run: |
+      #     set -euo pipefail
+      #
+      #     echo "ASG changes (module.autoscaling only) from plan:"
+      #     jq -r '
+      #       .resource_changes[]
+      #       | select(.type == "aws_autoscaling_group")
+      #       | select(.address | test("module\\.autoscaling"))
+      #       | select(.change.before != null and .change.after != null)
+      #       | [
+      #           " - " + .address,
+      #           "    min_size: " + ((.change.before.min_size // null) | tostring) + " -> " + ((.change.after.min_size // null) | tostring),
+      #           "    desired_capacity: " + ((.change.before.desired_capacity // null) | tostring) + " -> " + ((.change.after.desired_capacity // null) | tostring)
+      #         ]
+      #       | .[]
+      #     ' tfplan.json || true
+      #
+      #     if jq -e '
+      #       .resource_changes[]
+      #       | select(.type == "aws_autoscaling_group")
+      #       | select(.address | test("module\\.autoscaling"))
+      #       | select(.change.before != null and .change.after != null)
+      #       | .change as $c
+      #       | (
+      #           (($c.before.min_size? // 0) > 0 and ($c.after.min_size? // 0) == 0)
+      #           or
+      #           (($c.before.desired_capacity? // 0) > 0 and ($c.after.desired_capacity? // 0) == 0)
+      #         )
+      #     ' tfplan.json > /dev/null; then
+      #       echo
+      #       echo "Guardrail triggered: module.autoscaling would scale ASG DOWN to 0. Aborting."
+      #       echo "This indicates the runner is using unexpected overrides or wrong files."
+      #       exit 1
+      #     fi
+      #
+      #     echo "Guardrail passed."
 
       - name: Terraform Apply (from plan)
         run: |

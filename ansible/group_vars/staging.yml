@@ -5,22 +5,22 @@
 # Feature flag: por defecto NO crear roles (evita ruido tipo item=None)
 enable_roles: false
 
-# Conexión vía port-forward (SSM o túnel)
+# Conection vía port-forward (SSM o túnel)
 db_host: "127.0.0.1"
 db_port: 65432
 
-# Base de datos principal
+# Main Database
 db_name: "infradeploystaging"
 
-# Usuario administrador (master definido en Terraform)
+# Admin User (master definido en Terraform)
 db_admin_user: "postgres"
 
-# ⚠️ NO guardes la password real en git.
-# Déjalo como placeholder y pásalo por CLI:
+# ⚠️ NO guardar la password real en git.
+# Dejarlo como placeholder y pasarlo por CLI:
 # -e "db_admin_password=TU_PASSWORD_REAL"
 db_admin_password: "TU_PASSWORD_REAL_AQUI"
 
-# RDS / Proxy suele requerir SSL
+# RDS / Proxy require SSL
 db_ssl_mode: "require"
 
 # ================================
@@ -33,7 +33,7 @@ pg_roles:
     flags: "LOGIN"
 
 # ================================
-# Extensiones
+# Extentions
 # ================================
 pg_extensions:
   - pgcrypto
@@ -46,7 +46,7 @@ pg_schemas:
     owner: "postgres"
 
 # ================================
-# Privilegios
+# Privileges
 # ================================
 pg_privs:
   - type: "schema"
